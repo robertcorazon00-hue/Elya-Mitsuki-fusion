@@ -1,0 +1,113 @@
+{
+  "name": "elya-mitsuki-fusion",
+  "description": "Elya AI + Mitsuki Kiryu-MD - Bot WhatsApp fusionné (IA conversationnelle + dashboard + commandes .prefix)",
+  "keywords": ["whatsapp-bot", "baileys", "elya", "mitsuki"],
+  "stack": "container",
+  "env": {
+    "PAIRING_NUMBER": {
+      "description": "Ton numéro WhatsApp avec indicatif pays, sans + (ex: 22871406871), pour le code de jumelage",
+      "required": true,
+      "value": ""
+    },
+    "USE_PAIRING_CODE": {
+      "description": "true pour utiliser un code de jumelage plutôt qu'un QR code (nécessaire en hébergement sans terminal interactif)",
+      "required": false,
+      "value": "true"
+    },
+    "OWNER_NUMBERS": {
+      "description": "Numéros WhatsApp du/des propriétaire(s), séparés par des virgules",
+      "required": true,
+      "value": "22871406871,22893926249,22896651556,22879757503,22897526415"
+    },
+    "TELEGRAM_BOT_TOKEN": {
+      "description": "Token du bot Telegram (@BotFather) pour recevoir le QR/pairing code par Telegram (optionnel)",
+      "required": false,
+      "value": ""
+    },
+    "TELEGRAM_CHAT_ID": {
+      "description": "Ton chat_id Telegram (demande-le à @userinfobot), requis si TELEGRAM_BOT_TOKEN est renseigné",
+      "required": false,
+      "value": ""
+    },
+    "DASHBOARD_PASSWORD": {
+      "description": "Mot de passe pour accéder au dashboard web",
+      "required": true,
+      "value": ""
+    },
+    "PORT": {
+      "description": "Port du serveur (fourni automatiquement par la plupart des hébergeurs)",
+      "required": false,
+      "value": "3000"
+    },
+    "PREFIX": {
+      "description": "Préfixe des commandes Elya AI",
+      "required": false,
+      "value": "!"
+    },
+    "BOT_NAME": {
+      "description": "Nom affiché du bot",
+      "required": false,
+      "value": "Elya"
+    },
+    "GEMINI_API_KEY": {
+      "description": "Clé API Google Gemini (IA principale)",
+      "required": false,
+      "value": ""
+    },
+    "GROQ_API_KEY": {
+      "description": "Clé API Groq (fallback IA)",
+      "required": false,
+      "value": ""
+    },
+    "OPENROUTER_API_KEY": {
+      "description": "Clé API OpenRouter (fallback IA)",
+      "required": false,
+      "value": ""
+    },
+    "TAVILY_API_KEY": {
+      "description": "Clé API Tavily (recherche web pour !recherche/!autosearch)",
+      "required": false,
+      "value": ""
+    },
+    "NEWSDATA_API_KEY": {
+      "description": "Clé API NewsData (actualités, .news et !actu)",
+      "required": false,
+      "value": ""
+    },
+    "GOOGLE_SERVICE_ACCOUNT_BASE64": {
+      "description": "Compte de service Google encodé en base64 (pour !drive, upload Google Drive)",
+      "required": false,
+      "value": ""
+    },
+    "GOOGLE_DRIVE_FOLDER_ID": {
+      "description": "ID du dossier Google Drive de destination (optionnel)",
+      "required": false,
+      "value": ""
+    },
+    "MONGO_URL": {
+      "description": "URL MongoDB pour un stockage persistant (recommandé en hébergement éphémère type Heroku)",
+      "required": false,
+      "value": ""
+    },
+    "POSTGRES_URL": {
+      "description": "URL PostgreSQL pour un stockage persistant (alternative à MongoDB)",
+      "required": false,
+      "value": ""
+    },
+    "MYSQL_URL": {
+      "description": "URL MySQL pour un stockage persistant (alternative à MongoDB)",
+      "required": false,
+      "value": ""
+    }
+  },
+  "buildpacks": [
+    { "url": "heroku/nodejs" },
+    { "url": "https://github.com/jonathanong/heroku-buildpack-ffmpeg-latest" }
+  ],
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  }
+}

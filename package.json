@@ -1,0 +1,30 @@
+{
+  "name": "elya-mitsuki-fusion",
+  "version": "1.0.0",
+  "description": "Elya Prime + Mitsuki Kiryu-MD — bot WhatsApp fusionné (Baileys)",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "@whiskeysockets/baileys": "^6.7.18",
+    "axios": "^1.7.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.0",
+    "form-data": "^4.0.0",
+    "mathjs": "^13.0.0",
+    "mongodb": "^6.9.0",
+    "mysql2": "^3.11.0",
+    "pdf-lib": "^1.17.1",
+    "pg": "^8.13.0",
+    "qrcode": "^1.5.3",
+    "sharp": "^0.33.0",
+    "socket.io": "^4.7.5"
+  }
+}

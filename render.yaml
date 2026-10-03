@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: elya-mitsuki-fusion
+    runtime: docker
+    dockerfilePath: Dockerfile
+    envVars:
+      - key: PAIRING_NUMBER
+        sync: false
+      - key: USE_PAIRING_CODE
+        value: "true"
+      - key: OWNER_NUMBERS
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: PREFIX
+        value: "!"
+      - key: BOT_NAME
+        value: "Elya"
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: NEWSDATA_API_KEY
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_BASE64
+        sync: false
+      - key: MONGO_URL
+        sync: false
+      - key: POSTGRES_URL
+        sync: false
+      - key: MYSQL_URL
+        sync: false
+    disk:
+      name: elya-mitsuki-data
+      mountPath: /app/data
+      sizeGB: 1
