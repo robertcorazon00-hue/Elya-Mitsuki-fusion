@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🌙 Elya Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+:root{--bg:#0f1117;--card:#1a1d26;--accent:#7FB8D4;--accent2:#A9D3E5;--text:#e6edf3;--text-soft:#8b949e;--border:#30363d;--success:#3fb950;--warning:#d29922;--error:#f85149;--radius:14px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;min-height:100vh;padding:24px}
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;flex-wrap:wrap;gap:16px}
+.header h1{font-size:28px;display:flex;align-items:center;gap:12px}
+.header h1 span{font-size:36px}
+.status-badge{padding:6px 14px;border-radius:999px;font-size:13px;font-weight:600;background:var(--border);color:var(--text-soft);display:flex;align-items:center;gap:8px}
+.status-badge.online{background:rgba(63,185,80,.15);color:var(--success)}
+.status-badge.offline{background:rgba(248,81,73,.15);color:var(--error)}
+.status-dot{width:8px;height:8px;border-radius:50%;background:currentColor;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-bottom:24px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;transition:transform .2s,box-shadow .2s}
+.card:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.3)}
+.card-value{font-size:32px;font-weight:700;color:var(--accent);margin-bottom:4px}
+.card-label{font-size:13px;color:var(--text-soft);text-transform:uppercase;letter-spacing:.05em}
+.card-delta{font-size:12px;color:var(--success);margin-top:6px}
+.section{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:20px}
+.section h2{font-size:16px;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.chart-container{position:relative;height:280px}
+.table{width:100%;border-collapse:collapse;font-size:13px}
+.table th{text-align:left;padding:10px 12px;color:var(--text-soft);font-weight:500;border-bottom:1px solid var(--border);text-transform:uppercase;font-size:11px;letter-spacing:.05em}
+.table td{padding:10px 12px;border-bottom:1px solid var(--border);color:var(--text)}
+.table tr:hover td{background:rgba(127,184,212,.05)}
+.table td:last-child{text-align:right}
+.btn{padding:6px 12px;border-radius:8px;border:none;background:var(--accent);color:#0f1117;font-size:12px;font-weight:600;cursor:pointer;transition:opacity .2s}
+.btn:hover{opacity:.85}
+.btn-danger{background:var(--error);color:#fff}
+.btn-sm{padding:4px 10px;font-size:11px}
+.tabs{display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap}
+.tab{padding:8px 16px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--text-soft);cursor:pointer;font-size:13px;transition:all .2s}
+.tab.active{background:var(--accent);color:#0f1117;border-color:var(--accent);font-weight:600}
+.tab:hover:not(.active){border-color:var(--accent);color:var(--text)}
+.tab-content{display:none}
+.tab-content.active{display:block}
+.badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600}
+.badge-strike{background:rgba(248,81,73,.15);color:var(--error)}
+.badge-ok{background:rgba(63,185,80,.15);color:var(--success)}
+.empty{text-align:center;padding:40px;color:var(--text-soft);font-size:14px}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center;padding:20px}
+.modal-overlay.show{display:flex}
+.modal{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px;width:100%;max-width:400px}
+.modal h3{margin-bottom:12px}
+.modal input{width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:12px;font-size:14px}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end}
+.modal-btn{padding:8px 16px;border-radius:8px;border:none;cursor:pointer;font-size:13px;font-weight:600}
+.modal-btn.cancel{background:var(--border);color:var(--text)}
+.modal-btn.confirm{background:var(--accent);color:#0f1117}
+.broadcast-area{width:100%;min-height:80px;padding:12px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:14px;resize:vertical;margin-bottom:12px;font-family:inherit}
+.qr-box{text-align:center;padding:20px;background:var(--bg);border-radius:var(--radius);margin-bottom:20px}
+.qr-box img{max-width:280px;border-radius:12px}
+.login-screen{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:200}
+.login-box{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:32px;width:100%;max-width:320px;text-align:center}
+.login-box h2{margin-bottom:8px}
+.login-box p{color:var(--text-soft);font-size:13px;margin-bottom:20px}
+.login-box input{width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:12px;font-size:14px}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+</style>
+</head>
+<body>
+
+<div class="login-screen" id="loginScreen">
+  <div class="login-box">
+    <h2>🌙 Elya Dashboard</h2>
+    <p>Entre le mot de passe pour accéder au tableau de bord</p>
+    <input type="password" id="loginPassword" placeholder="Mot de passe">
+    <button class="btn" style="width:100%;padding:12px" onclick="doLogin()">Connexion</button>
+    <p id="loginError" style="color:var(--error);font-size:12px;margin-top:10px"></p>
+  </div>
+</div>
+
+<div id="dashboard" style="display:none">
+  <div class="header">
+    <h1><span>🌙</span> Elya Dashboard</h1>
+    <div class="status-badge" id="statusBadge">
+      <span class="status-dot"></span>
+      <span id="statusText">Connexion...</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-value" id="statMessages">0</div>
+      <div class="card-label">Messages totaux</div>
+      <div class="card-delta" id="statToday">+0 aujourd'hui</div>
+    </div>
+    <div class="card">
+      <div class="card-value" id="statConversations">0</div>
+      <div class="card-label">Conversations</div>
+    </div>
+    <div class="card">
+      <div class="card-value" id="statCommands">0</div>
+      <div class="card-label">Commandes Elya AI (!)</div>
+    </div>
+    <div class="card">
+      <div class="card-value" id="statMitsukiCommands">0</div>
+      <div class="card-label">Commandes Mitsuki MD (.)</div>
+    </div>
+    <div class="card">
+      <div class="card-value" id="statImages">0</div>
+      <div class="card-label">Images générées</div>
+    </div>
+    <div class="card">
+      <div class="card-value" id="statMemories">0</div>
+      <div class="card-label">Souvenirs</div>
+    </div>
+    <div class="card">
+      <div class="card-value" id="statBanned">0</div>
+      <div class="card-label">Mots interdits</div>
+    </div>
+    <div class="card">
+      <div class="card-value" id="statAiCalls">0</div>
+      <div class="card-label">Appels IA totaux</div>
+    </div>
+    <div class="card">
+      <div class="card-value" id="statMilestones">0</div>
+      <div class="card-label">Paliers de messages atteints</div>
+    </div>
+  </div>
+
+  <div class="section" id="aiUsageSection" style="margin-top:24px;">
+    <h2>🤖 Utilisation par fournisseur IA</h2>
+    <div id="aiUsageList" style="display:flex; flex-direction:column; gap:6px; margin-top:12px;"></div>
+  </div>
+
+  <div class="section" id="logsSection" style="margin-top:24px;">
+    <h2>📋 Dernières erreurs <button onclick="loadLogs()" style="margin-left:auto;font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text);cursor:pointer">Rafraîchir</button></h2>
+    <div id="logsList" style="display:flex; flex-direction:column; gap:6px; margin-top:12px; max-height:300px; overflow-y:auto; font-family:monospace; font-size:11px;"></div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('overview')">📊 Vue d'ensemble</button>
+    <button class="tab" onclick="showTab('conversations')">💬 Conversations</button>
+    <button class="tab" onclick="showTab('groupes')">👥 Groupes</button>
+    <button class="tab" onclick="showTab('links')">🔗 Liens</button>
+    <button class="tab" onclick="showTab('moderation')">🛡️ Modération</button>
+    <button class="tab" onclick="showTab('memory')">🧠 Mémoire</button>
+    <button class="tab" onclick="showTab('tools')">🛠️ Outils</button>
+  </div>
+
+  <!-- OVERVIEW -->
+  <div class="tab-content active" id="tab-overview">
+    <div class="section">
+      <h2>📈 Activité des 7 derniers jours</h2>
+      <div class="chart-container">
+        <canvas id="activityChart"></canvas>
+      </div>
+    </div>
+    <div class="section">
+      <h2>👥 Top utilisateurs</h2>
+      <div id="topUsersContainer">
+        <div class="empty">Chargement...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CONVERSATIONS -->
+  <div class="tab-content" id="tab-conversations">
+    <div class="section">
+      <h2>💬 Conversations actives</h2>
+      <table class="table">
+        <thead><tr><th>Chat ID</th><th>Messages</th><th>Dernier message</th><th>Action</th></tr></thead>
+        <tbody id="convTable"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- GROUPES -->
+  <div class="tab-content" id="tab-groupes">
+    <div class="section">
+      <h2>👥 Gestion des groupes</h2>
+      <p style="color:var(--text-soft);font-size:13px;margin-bottom:16px">
+        Active le mode <b>"Elya répond à tout"</b> pour qu'Elya réponde à chaque message sans être taguée.
+        Par défaut, elle ne répond qu'aux mentions <code>@Elya</code>.
+      </p>
+      <div id="groupsContainer">
+        <div class="empty">Chargement...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- LIENS -->
+  <div class="tab-content" id="tab-links">
+    <div class="section">
+      <h2>🔗 Bibliothèque de liens</h2>
+      <p style="color:var(--text-soft);font-size:13px;margin-bottom:16px">
+        Elya détecte automatiquement les liens partagés dans tous les groupes et conversations.
+        Les liens suspects sont marqués ⚠️.
+      </p>
+      <div id="linksContainer">
+        <div class="empty">Chargement...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODERATION -->
+  <div class="tab-content" id="tab-moderation">
+    <div class="section">
+      <h2>⚠️ Strikes par groupe</h2>
+      <div id="strikesContainer">
+        <div class="empty">Chargement...</div>
+      </div>
+    </div>
+    <div class="section">
+      <h2>🚫 Mots interdits</h2>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px" id="bannedWordsList"></div>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="newWordInput" placeholder="Nouveau mot interdit..." style="flex:1;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+        <button class="btn" onclick="addBannedWord()">Ajouter</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MEMORY -->
+  <div class="tab-content" id="tab-memory">
+    <div class="section">
+      <h2>🧠 Souvenirs par conversation</h2>
+      <div id="memoryContainer">
+        <div class="empty">Chargement...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOOLS -->
+  <div class="tab-content" id="tab-tools">
+    <div class="section">
+      <h2>💬 Message ciblé</h2>
+      <p style="color:var(--text-soft);font-size:13px;margin-bottom:12px">Envoie un message à une conversation spécifique</p>
+      <select id="targetChatSelect" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:12px;font-size:14px">
+        <option value="">Chargement des conversations...</option>
+      </select>
+      <textarea class="broadcast-area" id="targetMsg" placeholder="Écris ton message ici..." style="min-height:60px"></textarea>
+      <button class="btn" onclick="sendTargetedMessage()">Envoyer à cette conversation</button>
+    </div>
+    <div class="section">
+      <h2>📢 Broadcast global</h2>
+      <p style="color:var(--text-soft);font-size:13px;margin-bottom:12px">Envoie un message à toutes les conversations actives</p>
+      <textarea class="broadcast-area" id="broadcastMsg" placeholder="Écris ton message ici..."></textarea>
+      <button class="btn" onclick="sendBroadcast()">Envoyer à tous</button>
+    </div>
+    <div class="section">
+      <h2>⏰ Envois programmés <button onclick="loadScheduledSends()" style="margin-left:auto;font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text);cursor:pointer">Rafraîchir</button></h2>
+      <p style="color:var(--text-soft);font-size:13px;margin-bottom:12px">Programmés via !send — fuseau Africa/Lome</p>
+      <div id="scheduledSendsList">Chargement...</div>
+    </div>
+    <div class="section">
+      <h2>🔄 Actions</h2>
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <button class="btn btn-danger" onclick="resetAllData()">🗑️ Tout réinitialiser</button>
+        <button class="btn" onclick="exportData()">📥 Exporter les données</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_KEY = localStorage.getItem('elya_dashboard_key') || '';
+let socket = null;
+let activityChart = null;
+
+function doLogin() {
+  const pwd = document.getElementById('loginPassword').value;
+  fetch('/api/stats?key=' + encodeURIComponent(pwd))
+    .then(r => {
+      if (!r.ok) throw new Error('Mauvais mot de passe');
+      localStorage.setItem('elya_dashboard_key', pwd);
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('dashboard').style.display = 'block';
+      initDashboard(pwd);
+    })
+    .catch(() => {
+      document.getElementById('loginError').textContent = 'Mot de passe incorrect';
+    });
+}
+
+if (API_KEY) {
+  fetch('/api/stats?key=' + encodeURIComponent(API_KEY))
+    .then(r => {
+      if (r.ok) {
+        document.getElementById('loginScreen').style.display = 'none';
+        document.getElementById('dashboard').style.display = 'block';
+        initDashboard(API_KEY);
+      }
+    });
+}
+
+function initDashboard(key) {
+  socket = io();
+  socket.on('statsUpdate', data => renderStats(data, key));
+  socket.on('qr', qr => {
+    // Le QR apparaît dans le terminal, pas besoin ici
+  });
+  fetchStats(key);
+  loadLogs();
+  loadScheduledSends();
+  setInterval(() => fetchStats(key), 5000);
+}
+
+function fetchStats(key) {
+  fetch('/api/stats?key=' + encodeURIComponent(key))
+    .then(r => r.json())
+    .then(data => renderStats(data, key))
+    .catch(() => {});
+  fetch('/api/mitsuki-stats?key=' + encodeURIComponent(key))
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('statMitsukiCommands').textContent = data.total || 0;
+    })
+    .catch(() => {});
+}
+
+function loadLogs() {
+  const logsList = document.getElementById('logsList');
+  if (!logsList) return;
+  fetch('/api/logs?key=' + encodeURIComponent(API_KEY))
+    .then(r => r.json())
+    .then(data => {
+      const logs = data.logs || [];
+      logsList.innerHTML = logs.length > 0
+        ? logs.slice().reverse().map(l => {
+            const time = new Date(l.time).toLocaleString('fr-FR');
+            return `<div style="padding:6px 8px;border-radius:6px;background:rgba(239,68,68,0.08);border-left:2px solid #ef4444;">
+              <div style="opacity:0.6;font-size:10px;">${time}</div>
+              <div>${escapeHtml(l.message).slice(0, 300)}</div>
+            </div>`;
+          }).join('')
+        : '<div style="opacity:0.6;">Aucune erreur enregistrée pour l\'instant 🌙</div>';
+    })
+    .catch(() => {
+      logsList.innerHTML = '<div style="opacity:0.6;">Impossible de charger les logs.</div>';
+    });
+}
+
+const SCHEDULED_STATUS_LABEL = {
+  pending: ['⏳ En attente', '#a78bfa'],
+  sent: ['✅ Envoyé', '#4ade80'],
+  failed: ['❌ Échec', '#ef4444'],
+  cancelled: ['🗑️ Annulé', '#9ca3af'],
+};
+
+function loadScheduledSends() {
+  const el = document.getElementById('scheduledSendsList');
+  if (!el) return;
+  fetch('/api/scheduled-sends?key=' + encodeURIComponent(API_KEY))
+    .then(r => r.json())
+    .then(items => {
+      if (!items || items.length === 0) {
+        el.innerHTML = '<div style="opacity:0.6;">Aucun envoi programmé pour l\'instant.</div>';
+        return;
+      }
+      el.innerHTML = items.map(it => {
+        const [label, color] = SCHEDULED_STATUS_LABEL[it.status] || ['?', '#9ca3af'];
+        const when = new Date(it.scheduledAt).toLocaleString('fr-FR');
+        const cancelBtn = it.status === 'pending'
+          ? `<button onclick="cancelScheduledSendUI(${it.id})" style="font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text);cursor:pointer">Annuler</button>`
+          : '';
+        return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px;border-radius:8px;background:rgba(148,163,184,0.06);margin-bottom:6px;">
+          <div style="min-width:0">
+            <div style="font-size:12px;opacity:0.7">#${it.id} · ${when} · <span style="color:${color}">${label}</span></div>
+            <div style="font-weight:600">${escapeHtml(it.toDisplay)}</div>
+            <div style="font-size:13px;opacity:0.85;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(it.message)}</div>
+            ${it.error ? `<div style="font-size:11px;color:#ef4444">${escapeHtml(it.error)}</div>` : ''}
+          </div>
+          ${cancelBtn}
+        </div>`;
+      }).join('');
+    })
+    .catch(() => {
+      el.innerHTML = '<div style="opacity:0.6;">Impossible de charger les envois programmés.</div>';
+    });
+}
+
+function cancelScheduledSendUI(id) {
+  if (!confirm('Annuler cet envoi programmé ?')) return;
+  fetch('/api/scheduled-sends/' + id + '/cancel?key=' + encodeURIComponent(API_KEY), { method: 'POST' })
+    .then(() => loadScheduledSends());
+}
+
+function renderStats(data, key) {
+  loadTargetChats();
+  renderGroups(data.groupSettings);
+  renderLinks(data.recentLinks);
+  document.getElementById('statMessages').textContent = data.totalMessages.toLocaleString();
+  document.getElementById('statConversations').textContent = data.totalConversations;
+  document.getElementById('statCommands').textContent = data.totalCommands;
+  document.getElementById('statImages').textContent = data.totalImages;
+  document.getElementById('statMemories').textContent = data.totalMemories;
+  document.getElementById('statBanned').textContent = data.totalBannedWords;
+  document.getElementById('statToday').textContent = '+' + (data.activeToday || 0) + " aujourd'hui";
+  document.getElementById('statMilestones').textContent = data.totalMilestonesHit || 0;
+
+  const aiUsage = data.aiUsage || {};
+  const aiEntries = Object.entries(aiUsage).sort((a, b) => b[1] - a[1]);
+  const aiTotal = aiEntries.reduce((sum, [, n]) => sum + n, 0);
+  document.getElementById('statAiCalls').textContent = aiTotal.toLocaleString();
+  const aiUsageList = document.getElementById('aiUsageList');
+  if (aiUsageList) {
+    aiUsageList.innerHTML = aiEntries.length > 0
+      ? aiEntries.map(([provider, count]) => {
+          const pct = aiTotal > 0 ? Math.round((count / aiTotal) * 100) : 0;
+          return `<div style="display:flex; align-items:center; gap:10px;">
+            <span style="min-width:110px; font-weight:600;">${provider}</span>
+            <div style="flex:1; background:rgba(255,255,255,0.08); border-radius:6px; height:10px; overflow:hidden;">
+              <div style="width:${pct}%; background:#8b5cf6; height:100%;"></div>
+            </div>
+            <span style="min-width:70px; text-align:right; opacity:0.7;">${count} (${pct}%)</span>
+          </div>`;
+        }).join('')
+      : '<div style="opacity:0.6;">Aucun appel IA enregistré pour l\'instant.</div>';
+  }
+
+  const badge = document.getElementById('statusBadge');
+  const txt = document.getElementById('statusText');
+  if (data.botStatus === 'connected') {
+    badge.className = 'status-badge online';
+    txt.textContent = 'En ligne — ' + data.botNumber;
+  } else if (data.botStatus === 'connecting') {
+    badge.className = 'status-badge';
+    txt.textContent = 'Connexion en cours...';
+  } else {
+    badge.className = 'status-badge offline';
+    txt.textContent = 'Hors ligne';
+  }
+
+  renderChart(data.last7Days);
+  renderTopUsers(data.topUsers);
+  renderConversations(key);
+  renderStrikes(data.strikes);
+  renderBannedWords(data.bannedWords);
+  renderMemory(data);
+}
+
+function renderChart(days) {
+  const ctx = document.getElementById('activityChart').getContext('2d');
+  const labels = days.map(d => d.date.slice(5));
+  const msgs = days.map(d => d.messages || 0);
+  const cmds = days.map(d => d.commands || 0);
+  const imgs = days.map(d => d.images || 0);
+
+  if (activityChart) activityChart.destroy();
+
+  activityChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Messages', data: msgs, backgroundColor: '#7FB8D4', borderRadius: 6 },
+        { label: 'Commandes', data: cmds, backgroundColor: '#A9D3E5', borderRadius: 6 },
+        { label: 'Images', data: imgs, backgroundColor: '#4CAF50', borderRadius: 6 }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: '#e6edf3' } } },
+      scales: {
+        x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } },
+        y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } }
+      }
+    }
+  });
+}
+
+function renderTopUsers(users) {
+  const container = document.getElementById('topUsersContainer');
+  if (!users || users.length === 0) {
+    container.innerHTML = '<div class="empty">Aucune donnée utilisateur</div>';
+    return;
+  }
+  container.innerHTML = '<table class="table"><thead><tr><th>Utilisateur</th><th>Messages</th></tr></thead><tbody>' +
+    users.map(([name, count]) => `<tr><td>${escapeHtml(name)}</td><td>${count}</td></tr>`).join('') +
+    '</tbody></table>';
+}
+
+function renderConversations(key) {
+  fetch('/api/conversations?key=' + encodeURIComponent(key))
+    .then(r => r.json())
+    .then(convs => {
+      const tbody = document.getElementById('convTable');
+      if (convs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty">Aucune conversation</td></tr>';
+        return;
+      }
+      tbody.innerHTML = convs.map(c => `
+        <tr>
+          <td style="font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(c.id)}</td>
+          <td>${c.messageCount}</td>
+          <td style="font-size:12px;color:var(--text-soft);max-width:300px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(c.lastMessage)}</td>
+          <td><button class="btn btn-sm btn-danger" onclick="deleteConv('${c.id}')">Supprimer</button></td>
+        </tr>
+      `).join('');
+    });
+}
+
+function renderStrikes(strikes) {
+  const container = document.getElementById('strikesContainer');
+  const entries = Object.entries(strikes);
+  if (entries.length === 0) {
+    container.innerHTML = '<div class="empty">Aucun strike enregistré ✅</div>';
+    return;
+  }
+  let html = '';
+  entries.forEach(([chatId, users]) => {
+    html += `<div style="margin-bottom:16px"><div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--accent)">${escapeHtml(chatId)}</div>`;
+    Object.entries(users).forEach(([userId, count]) => {
+      html += `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
+        <span>${escapeHtml(userId)} <span class="badge badge-strike">${count}/3</span></span>
+        <button class="btn btn-sm" onclick="clearStrike('${chatId}','${userId}')">Pardonner</button>
+      </div>`;
+    });
+    html += '</div>';
+  });
+  container.innerHTML = html;
+}
+
+function renderBannedWords(words) {
+  const container = document.getElementById('bannedWordsList');
+  container.innerHTML = words.map(w => `
+    <span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:8px;background:var(--bg);border:1px solid var(--border);font-size:12px">
+      ${escapeHtml(w)}
+      <span style="cursor:pointer;color:var(--error);font-weight:700" onclick="removeWord('${encodeURIComponent(w)}')">×</span>
+    </span>
+  `).join('');
+}
+
+function renderMemory(data) {
+  const container = document.getElementById('memoryContainer');
+  const mem = data.memory || {};
+  const entries = Object.entries(mem);
+  if (entries.length === 0) {
+    container.innerHTML = '<div class="empty">Elya ne se souvient encore de rien 💛</div>';
+    return;
+  }
+  let html = '';
+  entries.forEach(([chatId, facts]) => {
+    html += `<div style="margin-bottom:20px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--accent)">${escapeHtml(chatId)}</div>
+      <div style="display:flex;flex-direction:column;gap:6px">`;
+    facts.forEach(f => {
+      html += `<div style="padding:8px 12px;background:var(--bg);border-radius:8px;font-size:13px;border-left:3px solid var(--accent)">${escapeHtml(f)}</div>`;
+    });
+    html += '</div></div>';
+  });
+  container.innerHTML = html;
+}
+
+function showTab(id) {
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  event.target.classList.add('active');
+}
+
+function deleteConv(id) {
+  if (!confirm('Supprimer cette conversation ?')) return;
+  fetch('/api/conversations/' + encodeURIComponent(id) + '?key=' + encodeURIComponent(API_KEY), { method: 'DELETE' })
+    .then(() => renderConversations(API_KEY));
+}
+
+function clearStrike(chatId, userId) {
+  fetch('/api/strikes/' + encodeURIComponent(chatId) + '/' + encodeURIComponent(userId) + '?key=' + encodeURIComponent(API_KEY), { method: 'DELETE' })
+    .then(() => fetchStats(API_KEY));
+}
+
+function addBannedWord() {
+  const word = document.getElementById('newWordInput').value.trim();
+  if (!word) return;
+  fetch('/api/banned-words?key=' + encodeURIComponent(API_KEY), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ word })
+  }).then(() => {
+    document.getElementById('newWordInput').value = '';
+    fetchStats(API_KEY);
+  });
+}
+
+function removeWord(word) {
+  fetch('/api/banned-words/' + word + '?key=' + encodeURIComponent(API_KEY), { method: 'DELETE' })
+    .then(() => fetchStats(API_KEY));
+}
+
+function sendBroadcast() {
+  const msg = document.getElementById('broadcastMsg').value.trim();
+  if (!msg) return;
+  if (!confirm('Envoyer à TOUTES les conversations ?')) return;
+  fetch('/api/broadcast?key=' + encodeURIComponent(API_KEY), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: msg, target: 'all' })
+  }).then(r => r.json()).then(data => {
+    alert('Message envoyé à ' + data.sent + ' conversation(s) !');
+    document.getElementById('broadcastMsg').value = '';
+  });
+}
+
+function resetAllData() {
+  if (!confirm('⚠️ TOUT effacer ? Conversations, mémoire, strikes, stats ?')) return;
+  if (!confirm('Vraiment TOUT ? C\'est irréversible.')) return;
+  fetch('/api/conversations?key=' + encodeURIComponent(API_KEY))
+    .then(r => r.json())
+    .then(convs => {
+      return Promise.all(convs.map(c =>
+        fetch('/api/conversations/' + encodeURIComponent(c.id) + '?key=' + encodeURIComponent(API_KEY), { method: 'DELETE' })
+      ));
+    })
+    .then(() => {
+      alert('Données réinitialisées');
+      fetchStats(API_KEY);
+    });
+}
+
+function loadTargetChats() {
+  fetch('/api/conversations?key=' + encodeURIComponent(API_KEY))
+    .then(r => r.json())
+    .then(convs => {
+      const select = document.getElementById('targetChatSelect');
+      if (convs.length === 0) {
+        select.innerHTML = '<option value="">Aucune conversation</option>';
+        return;
+      }
+      select.innerHTML = convs.map(c => 
+        `<option value="${escapeHtml(c.id)}">${escapeHtml(c.id)} (${c.messageCount} msgs)</option>`
+      ).join('');
+    });
+}
+
+function renderLinks(links) {
+  const container = document.getElementById('linksContainer');
+  if (!links || links.length === 0) {
+    container.innerHTML = '<div class="empty">Aucun lien capturé pour l\'instant</div>';
+    return;
+  }
+  container.innerHTML = links.map(l => {
+    const emoji = l.trust === 'trusted' ? '✅' : l.trust === 'suspicious' ? '⚠️' : '🔗';
+    const date = new Date(l.timestamp).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:12px 0;border-bottom:1px solid var(--border);gap:12px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;word-break:break-all;margin-bottom:4px">
+            <span style="margin-right:6px">${emoji}</span>
+            <a href="${escapeHtml(l.url)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none">${escapeHtml(l.url)}</a>
+          </div>
+          <div style="font-size:11px;color:var(--text-soft)">
+            👤 ${escapeHtml(l.senderName || 'Inconnu')} • 💬 ${escapeHtml(l.sourceChat)} • 🕐 ${date}
+          </div>
+        </div>
+        <button class="btn btn-sm btn-danger" onclick="deleteLink('${l.id}')" style="flex-shrink:0">🗑</button>
+      </div>
+    `;
+  }).join('');
+}
+
+function deleteLink(id) {
+  fetch('/api/links/' + encodeURIComponent(id) + '?key=' + encodeURIComponent(API_KEY), { method: 'DELETE' })
+    .then(() => fetchStats(API_KEY));
+}
+
+function renderGroups(settings) {
+  const container = document.getElementById('groupsContainer');
+  fetch('/api/conversations?key=' + encodeURIComponent(API_KEY))
+    .then(r => r.json())
+    .then(convs => {
+      const groups = convs.filter(c => c.id.endsWith('@g.us'));
+      if (groups.length === 0) {
+        container.innerHTML = '<div class="empty">Aucun groupe actif pour le moment</div>';
+        return;
+      }
+      container.innerHTML = groups.map(g => {
+        const autoOn = settings && settings[g.id] && settings[g.id].autoReply;
+        const transOn = settings && settings[g.id] && settings[g.id].transcribe;
+        return `
+          <div style="padding:16px 0;border-bottom:1px solid var(--border)">
+            <div style="font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:8px">${escapeHtml(g.id)}</div>
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:12px;color:var(--text-soft)">🎙️ Transcription vocale</span>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span style="font-size:12px;color:var(--text-soft)">${transOn ? '✅ ON' : '🔕 OFF'}</span>
+                  <label class="switch" style="position:relative;display:inline-block;width:44px;height:24px">
+                    <input type="checkbox" ${transOn ? 'checked' : ''} onchange="toggleGroupTranscribe('${encodeURIComponent(g.id)}', this.checked)" style="opacity:0;width:0;height:0">
+                    <span style="position:absolute;cursor:pointer;inset:0;background:${transOn ? 'var(--accent)' : 'var(--border)'};border-radius:24px;transition:.25s"></span>
+                    <span style="position:absolute;width:18px;height:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.25s;transform:${transOn ? 'translateX(20px)' : 'translateX(0)'};pointer-events:none"></span>
+                  </label>
+                </div>
+              </div>
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:12px;color:var(--text-soft)">💬 Auto-réponse (répond à tout)</span>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span style="font-size:12px;color:var(--text-soft)">${autoOn ? '✅ ON' : '🔕 OFF'}</span>
+                  <label class="switch" style="position:relative;display:inline-block;width:44px;height:24px">
+                    <input type="checkbox" ${autoOn ? 'checked' : ''} onchange="toggleGroupAutoReply('${encodeURIComponent(g.id)}', this.checked)" style="opacity:0;width:0;height:0">
+                    <span style="position:absolute;cursor:pointer;inset:0;background:${autoOn ? 'var(--accent)' : 'var(--border)'};border-radius:24px;transition:.25s"></span>
+                    <span style="position:absolute;width:18px;height:18px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.25s;transform:${autoOn ? 'translateX(20px)' : 'translateX(0)'};pointer-events:none"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;font-size:11px">
+              <span style="padding:3px 8px;border-radius:6px;background:rgba(139,92,246,0.15);color:#a78bfa">🤖 ${escapeHtml((settings && settings[g.id] && settings[g.id].aiModel) || 'gemini')}</span>
+              <span style="padding:3px 8px;border-radius:6px;background:rgba(255,255,255,0.06)">🎭 ${escapeHtml((settings && settings[g.id] && settings[g.id].personality) || 'normale')}</span>
+              <span style="padding:3px 8px;border-radius:6px;background:${settings && settings[g.id] && settings[g.id].antidelete ? 'rgba(34,197,94,0.15);color:#4ade80' : 'rgba(255,255,255,0.06)'}">🛡️ Anti-suppression ${settings && settings[g.id] && settings[g.id].antidelete ? 'ON' : 'OFF'}</span>
+              <span style="padding:3px 8px;border-radius:6px;background:${settings && settings[g.id] && settings[g.id].presentation ? 'rgba(34,197,94,0.15);color:#4ade80' : 'rgba(255,255,255,0.06)'}">👋 Présentation ${settings && settings[g.id] && settings[g.id].presentation ? 'ON' : 'OFF'}</span>
+              <span style="padding:3px 8px;border-radius:6px;background:${settings && settings[g.id] && settings[g.id].milestones ? 'rgba(34,197,94,0.15);color:#4ade80' : 'rgba(255,255,255,0.06)'}">🎉 Paliers ${settings && settings[g.id] && settings[g.id].milestones ? 'ON' : 'OFF'}</span>
+              <span style="padding:3px 8px;border-radius:6px;background:${settings && settings[g.id] && settings[g.id].translation ? 'rgba(34,197,94,0.15);color:#4ade80' : 'rgba(255,255,255,0.06)'}">🌐 Traduction ${settings && settings[g.id] && settings[g.id].translation ? 'ON' : 'OFF'}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    });
+}
+
+function toggleGroupAutoReply(chatIdEncoded, enabled) {
+  const chatId = decodeURIComponent(chatIdEncoded);
+  fetch('/api/group-settings/' + encodeURIComponent(chatId) + '/auto-reply?key=' + encodeURIComponent(API_KEY), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled })
+  }).then(() => fetchStats(API_KEY));
+}
+function toggleGroupTranscribe(chatIdEncoded, enabled) {
+  const chatId = decodeURIComponent(chatIdEncoded);
+  fetch('/api/group-settings/' + encodeURIComponent(chatId) + '/transcribe?key=' + encodeURIComponent(API_KEY), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled })
+  }).then(() => fetchStats(API_KEY));
+}
+
+function sendTargetedMessage() {
+  const chatId = document.getElementById('targetChatSelect').value;
+  const msg = document.getElementById('targetMsg').value.trim();
+  if (!chatId) { alert('Sélectionne une conversation'); return; }
+  if (!msg) { alert('Écris un message'); return; }
+  if (!confirm('Envoyer à ' + chatId + ' ?')) return;
+  fetch('/api/send-message/' + encodeURIComponent(chatId) + '?key=' + encodeURIComponent(API_KEY), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: msg })
+  }).then(r => r.json()).then(data => {
+    if (data.success) {
+      alert('✅ Message envoyé !');
+      document.getElementById('targetMsg').value = '';
+    } else {
+      alert('❌ Erreur : ' + (data.error || 'inconnue'));
+    }
+  }).catch(e => alert('❌ Erreur réseau'));
+}
+
+function exportData() {
+  fetch('/api/stats?key=' + encodeURIComponent(API_KEY))
+    .then(r => r.json())
+    .then(data => {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'elya-stats-' + new Date().toISOString().slice(0, 10) + '.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+</script>
+</body>
+</html>
