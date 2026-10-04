@@ -5,6 +5,7 @@ FROM node:20-bookworm-slim
 # build-essential : au cas où sharp doive compiler depuis les sources sur cette plateforme.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    git \
     python3 \
     python3-pip \
     build-essential \
