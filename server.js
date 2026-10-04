@@ -519,7 +519,7 @@ function attachElyaListener(sock) {
             try {
               await sock.sendPresenceUpdate('recording', chatId).catch(() => {});
               const audioBuffer = await generateTTS(reply, 'fr');
-              await sock.sendMessage(chatId, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: true });
+              await sock.sendMessage(chatId, { audio: audioBuffer, mimetype: 'audio/ogg; codecs=opus', ptt: true });
             } catch (e2) {
               console.error('Erreur TTS réponse (vocal reçu):', e2.message);
               await sock.sendMessage(chatId, { text: reply });
@@ -577,7 +577,7 @@ function attachElyaListener(sock) {
         try {
           await sock.sendPresenceUpdate('recording', chatId).catch(() => {});
           const audioBuffer = await generateTTS(reply, 'fr');
-          await sock.sendMessage(chatId, { audio: audioBuffer, mimetype: 'audio/mpeg', ptt: true });
+          await sock.sendMessage(chatId, { audio: audioBuffer, mimetype: 'audio/ogg; codecs=opus', ptt: true });
         } catch (e) {
           console.error('Erreur TTS réponse auto:', e.message);
           await sock.sendMessage(chatId, { text: reply }); // repli texte si la synthèse vocale échoue
