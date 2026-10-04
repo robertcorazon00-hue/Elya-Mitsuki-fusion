@@ -3,6 +3,11 @@
 import axios from 'axios';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { BOT_NAME } from './config.js';
+import { spawn } from 'child_process';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
+import crypto from 'crypto';
 
 // ─── Synthèse vocale (TTS) ───
 // 1) Essaie d'abord le service vocal local (voice/service.py, edge-tts — bien meilleure
@@ -11,7 +16,41 @@ import { BOT_NAME } from './config.js';
 //    pas encore démarré, dépendances Python manquantes...).
 const VOICE_SERVICE_URL = `http://127.0.0.1:${process.env.VOICE_PORT || 5001}`;
 
+// WhatsApp n'affiche une note vocale "cliquable" (bulle ronde avec forme d'onde) que
+// si le fichier est en ogg/opus. Un mp3 envoyé avec ptt:true est accepté à l'envoi mais
+// échoue souvent à la lecture côté destinataire ("ce fichier n'existe pas / indisponible").
+// On repasse donc systématiquement par ffmpeg (déjà installé dans l'image Docker) pour
+// garantir un format lisible, quelle que soit la source (service local ou repli Google).
+async function convertToOggOpus(inputBuffer) {
+  const tmpDir = os.tmpdir();
+  const id = crypto.randomUUID();
+  const inputPath = path.join(tmpDir, `tts-in-${id}`);
+  const outputPath = path.join(tmpDir, `tts-out-${id}.ogg`);
+  await fs.writeFile(inputPath, inputBuffer);
+  try {
+    await new Promise((resolve, reject) => {
+      const ff = spawn('ffmpeg', [
+        '-y', '-i', inputPath,
+        '-c:a', 'libopus', '-ar', '16000', '-ac', '1', '-b:a', '32k',
+        outputPath,
+      ]);
+      let stderr = '';
+      ff.stderr.on('data', (d) => { stderr += d.toString(); });
+      ff.on('error', reject);
+      ff.on('close', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`ffmpeg exit ${code}: ${stderr.slice(-300)}`));
+      });
+    });
+    return await fs.readFile(outputPath);
+  } finally {
+    fs.unlink(inputPath).catch(() => {});
+    fs.unlink(outputPath).catch(() => {});
+  }
+}
+
 export async function generateTTS(text, lang) {
+  let raw;
   if (lang === 'fr') {
     try {
       const res = await axios.post(
@@ -19,12 +58,20 @@ export async function generateTTS(text, lang) {
         { text: text.slice(0, 800) },
         { responseType: 'arraybuffer', timeout: 8000 }
       );
-      return Buffer.from(res.data);
+      raw = Buffer.from(res.data);
     } catch (e) {
       // Service vocal local indisponible : on continue avec le repli ci-dessous, sans planter.
     }
   }
-  return generateTTSFallback(text, lang);
+  if (!raw) raw = await generateTTSFallback(text, lang);
+  try {
+    return await convertToOggOpus(raw);
+  } catch (e) {
+    // Si la conversion échoue pour une raison quelconque, on renvoie quand même le
+    // buffer d'origine plutôt que de planter toute la réponse.
+    console.error('Erreur conversion ogg/opus pour la note vocale:', e.message);
+    return raw;
+  }
 }
 
 async function generateTTSFallback(text, lang) {
