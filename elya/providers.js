@@ -103,6 +103,34 @@ const OPENAI_SEARCH_TOOL = [{
   },
 }];
 
+// Nettoie le texte brut renvoyé par les modèles "raisonneurs" (deepseek,
+// kimi, qwen, glm52...) qui mélangent parfois leur raisonnement interne à la
+// réponse finale sans séparateur fiable. Deux cas gérés :
+// 1) Balises <think>...</think> ou <thinking>...</thinking> (format standard
+//    de plusieurs API compatibles OpenAI pour exposer le raisonnement) : on
+//    les retire entièrement, qu'elles soient bien fermées ou tronquées.
+// 2) Marqueur explicite "Response:" / "Réponse :" utilisé par certains
+//    modèles pour séparer leur brouillon de la réponse finale : on ne garde
+//    que ce qui suit la DERNIÈRE occurrence.
+// Si aucun de ces motifs n'est présent (raisonnement et réponse mélangés
+// sans aucun séparateur, comme on l'a vu avec Kimi), le texte ressort
+// inchangé — un filtre plus agressif risquerait de couper de vraies
+// réponses, donc on reste volontairement prudent ici.
+export function stripReasoningTags(text) {
+  if (!text) return text;
+  let cleaned = text
+    .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '')
+    .replace(/<think(?:ing)?>[\s\S]*$/gi, '');
+  const marker = /(?:^|\n)\s*(?:response|r[ée]ponse)\s*:\s*/gi;
+  let lastIndex = -1;
+  let match;
+  while ((match = marker.exec(cleaned)) !== null) {
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex !== -1) cleaned = cleaned.slice(lastIndex);
+  return cleaned.trim();
+}
+
 export async function executeWebSearchForTool(query) {
   try {
     const searchData = await tavilySearch(query);
@@ -148,7 +176,7 @@ export async function askGroqOrOpenRouter(url, apiKey, modelName, systemPrompt, 
     choice = res.data.choices?.[0];
   }
 
-  return choice?.message?.content?.trim() || '';
+  return stripReasoningTags(choice?.message?.content?.trim() || '');
 }
 
 export async function askGPT5Wrapper(userText) {
@@ -181,7 +209,7 @@ async function askDavidcyrilAi(path, userText, queryParam = 'prompt') {
   const data = res.data;
   const answer = typeof data === 'string' ? data : (data.result || data.response || data.message || data.data);
   if (!answer) throw new Error('réponse davidcyriltech vide');
-  return answer;
+  return stripReasoningTags(answer);
 }
 
 // systemPrompt/chatId acceptés pour garder la même signature que les autres
