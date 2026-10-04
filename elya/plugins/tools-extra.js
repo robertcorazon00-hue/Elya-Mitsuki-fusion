@@ -12,6 +12,7 @@
 import axios from 'axios';
 import { PREFIX } from '../config.js';
 import { recordImage } from '../runtime.js';
+import { stripReasoningTags } from '../providers.js';
 
 const DCT_BASE = 'https://apis.davidcyriltech.my.id';
 const DCT_KEY = process.env.DAVIDCYRIL_API_KEY || '';
@@ -127,7 +128,7 @@ const kimi = {
     }
     try {
       const data = await dctGet('/ai/kimi-k2.6', { prompt: text });
-      const answer = typeof data === 'string' ? data : (data.result || data.response || data.message || data.data);
+      const answer = stripReasoningTags(typeof data === 'string' ? data : (data.result || data.response || data.message || data.data));
       if (!answer) throw new Error("pas de réponse reçue");
       await sock.sendMessage(chatId, { text: `🤖 *Kimi k2.6*\n\n${answer}` });
     } catch (e) {
@@ -149,7 +150,7 @@ const nova = {
     }
     try {
       const data = await dctGet('/ai/nova', { prompt: text });
-      const answer = typeof data === 'string' ? data : (data.result || data.response || data.message || data.data);
+      const answer = stripReasoningTags(typeof data === 'string' ? data : (data.result || data.response || data.message || data.data));
       if (!answer) throw new Error("pas de réponse reçue");
       await sock.sendMessage(chatId, { text: `🤖 *Nova AI*\n\n${answer}` });
     } catch (e) {
