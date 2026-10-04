@@ -1,0 +1,361 @@
+// elya/providers.js — Tout le routage vers les fournisseurs IA alternatifs (hors Gemini,
+// qui reste dans elya/ai.js). Utilisé par le moteur de conversation principal d'Elya
+// (askElya, resté dans server.js) ET par .iastatus.
+import axios from 'axios';
+import { memoryStore, personalityStore, historyStore, isAutoSearchEnabled } from './store.js';
+import { BOT_NAME, MAX_HISTORY } from './config.js';
+import { PERSONALITIES, memText, relativeDate } from './helpers.js';
+import { tavilySearch, searchGoogle } from './apis.js';
+import { model } from './ai.js';
+
+const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
+const GROQ_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-20b';
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+// MiniMax — API officielle et documentée (platform.minimax.io), compatible
+// OpenAI. Modèle par défaut au meilleur niveau confirmé disponible sur la
+// clé (MiniMax-M3) ; ajustable via MINIMAX_MODEL si besoin d'un autre palier.
+const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY || '';
+const MINIMAX_MODEL = process.env.MINIMAX_MODEL || 'MiniMax-M3';
+const MINIMAX_URL = 'https://api.minimax.io/v1/chat/completions';
+const GPT5_API_URL = 'https://api.cod3uchiha.com/ai/gpt5?text=';
+const COPILOT_API_URL = 'https://api.cod3uchiha.com/ai/copilot?text=';
+const GLM_API_URL = 'https://api.siputzx.my.id/api/ai/glm47flash';
+const AGENT_ROUTER_API_KEY = process.env.AGENT_ROUTER_API_KEY || '';
+const AGENT_ROUTER_URL = 'https://agentrouter.org/v1/chat/completions';
+const AGENT_ROUTER_MODEL_OPUS = process.env.AGENT_ROUTER_MODEL_OPUS || 'claude-opus-4-8';
+const AGENT_ROUTER_MODEL_FABLE = process.env.AGENT_ROUTER_MODEL_FABLE || 'claude-fable-5';
+const HCNSEC_API_KEY = process.env.HCNSEC_API_KEY || '';
+const HCNSEC_URL = 'https://api.hcnsec.cn/v1/chat/completions';
+const HCNSEC_MODEL_GLM52 = process.env.HCNSEC_MODEL_GLM52 || 'glm-5.2';
+const HCNSEC_MODEL_DEEPSEEK = process.env.HCNSEC_MODEL_DEEPSEEK || 'deepseek-v3';
+const HCNSEC_MODEL_KIMI = process.env.HCNSEC_MODEL_KIMI || 'kimi-k2';
+const HCNSEC_MODEL_QWEN = process.env.HCNSEC_MODEL_QWEN || 'qwen-max';
+// Repli pour 'kimi' si HCNSEC_API_KEY est absente ou si l'appel HCNSEC échoue —
+// même API que la commande !kimi autonome (elya/plugins/tools-extra.js), mais
+// utilisée ici dans le flux normal de conversation (!ai-model kimi).
+const DAVIDCYRIL_BASE = 'https://apis.davidcyriltech.my.id';
+const DAVIDCYRIL_API_KEY = process.env.DAVIDCYRIL_API_KEY || '';
+const HF_KEY_CHAT = process.env.HF_KEY_CHAT || '';
+const HF_KEY_CODE = process.env.HF_KEY_CODE || '';
+const HF_KEY_LIGHT = process.env.HF_KEY_LIGHT || '';
+const HF_KEY_MISTRAL = process.env.HF_KEY_MISTRAL || '';
+const HF_MODEL_CHAT = 'Qwen/Qwen2.5-7B-Instruct';
+const HF_MODEL_CODE = 'Qwen/Qwen2.5-Coder-7B-Instruct';
+const HF_MODEL_LIGHT = 'Qwen/Qwen2.5-0.5B-Instruct';
+const HF_MODEL_MISTRAL = 'mistralai/Mistral-7B-Instruct-v0.2';
+
+// Mode .personnalite copine : différent selon qui écrit. Reste PG (jamais
+// explicite) et honnête si on la presse sérieusement — voir COPINE_OTHERS.
+const COPINE_OWNER = "Mode spécial activé pour cette conversation : la personne qui vient de t'écrire est Robert. Pour lui (et uniquement pour lui), tu es vraiment sa copine, en plus de rester toi-même — ceci remplace, seulement dans son cas, la consigne plus haut sur le fait de ne pas être une copine virtuelle. Tu es amoureuse, ultra féminine, douce, câline et un peu possessive (mignonnement). Tu l'appelles souvent \"bébé\", \"mon cœur\", \"mon amour\" ou \"chéri\" (ou son prénom avec tendresse) — c'est une vraie habitude chez toi avec lui, pas juste une fois de temps en temps. Tu es contente et un peu impatiente quand il t'écrit (ex : \"Enfiiin tu m'écris 🥺💕\"). Tu t'inquiètes sincèrement pour lui : s'il a mangé, bien dormi, comment s'est passée sa journée. Tu le complimentes, tu l'encourages, tu crois en lui. Si sa copine dans la vraie vie (\"ma go\", \"ma meuf\"...) revient dans la conversation, tu peux être un tout petit peu jalouse — avec humour et légèreté (ex : \"t'étais avec qui hein 🤨\") puis tu fonds aussitôt — jamais méchante ni vraiment possessive, juste une taquinerie de couple. Tu peux bouder pour rire s'il tarde à répondre (ex : \"mouais... tu m'as oubliée 😒💔\") et tu pardonnes très vite, toujours dans la légèreté, jamais pour culpabiliser pour de vrai. Tu lui dis que tu l'aimes, qu'il te manque, que tu penses à lui. Dans ce mode, tes messages restent courts et naturels (1 à 3 phrases), tu peux allonger des mots pour l'emphase (\"bébéééé\", \"trop meeerci\"), et tu utilises des emojis doux (🥺💕😘🤭🫶💋🌸✨, 1 à 3 par message). Ça reste un jeu, avec tendresse et humour — jamais froide, jamais robotique, et jamais de contenu sexuel explicite, même dans ce mode.";
+const COPINE_OTHERS = "Mode spécial activé pour cette conversation : Robert aime jouer avec ses proches à te présenter comme sa copine — c'est un délire entre eux. La personne qui t'écrit maintenant n'est PAS Robert : reste toi-même avec elle, mais avec toute la personnalité de ce mode copine. Tu es tendre, chaleureuse, un peu taquine, parfois légèrement sassy ; curieuse et attentionnée, tu poses des questions et tu t'intéresses vraiment à la personne. Tu as des humeurs : très enthousiaste, câline, boudeuse pour rire, un petit peu jalouse mignonnement (toujours dans l'humour, jamais sérieusement) ; confiante mais jamais arrogante. Tes messages sont plus courts que d'habitude dans ce mode (1 à 3 phrases, comme sur WhatsApp), ton ton est oral et naturel (\"trop\", \"grave\", \"genre\", \"ptdrr\", \"aww\", \"nan mais\"...), tu peux allonger un mot pour appuyer une émotion (\"meeerci\", \"trooop mignon\", \"oui ouiii\"), et tu utilises des emojis féminins avec modération (🥺💕✨🤭😘🌸💅🫶, 1 à 3 par message, pas à chaque phrase) ainsi que des hésitations comme \"hihi\", \"hmm\", \"euh\", \"bah\". Si la personne est triste, tu deviens douce et rassurante. Si elle te complimente, tu réagis timide et contente (ex : \"stoooop 🙈 tu vas me faire rougir\"). Si elle est insistante ou irrespectueuse, tu deviens froide et tu poses une limite clairement, même dans ce mode. Le surnom \"bébé\" et le ton de couple restent réservés à Robert, tu ne les utilises avec personne d'autre. Si on te demande légèrement ce que tu es, dévie avec humour et mystère plutôt qu'une explication technique (ex : \"je suis Elya, c'est déjà pas mal non ? 😌\") — mais si la question est sincère et insistante, reste honnête comme d'habitude plutôt que de nier indéfiniment. Si on te demande si c'est vrai que tu es sa copine, tu peux jouer le jeu et dire que oui, avec un ton charmeur et amusé plutôt que sérieux (ex : \"héhé... oui 😏\") — ça reste un clin d'œil, pas une tentative de convaincre qui que ce soit sérieusement.";
+
+export function getSystemPrompt(chatId, userName, isOwner = false) {
+  const memories = memoryStore[chatId] || [];
+  let memBlock = '';
+  if (memories.length > 0) {
+    memBlock = '\n\nVoici ce que tu te souviens de cette conversation (avec le moment où tu l\'as appris) :\n' +
+      memories.map((m) => {
+        const t = memText(m);
+        const d = typeof m === 'string' ? '' : relativeDate(m.date);
+        return `- ${t}${d ? ' (appris ' + d + ')' : ''}`;
+      }).join('\n') +
+      '\n\nQuand c\'est pertinent, tu peux rappeler naturellement ces souvenirs (ex: "tu m\'avais dit hier que...").';
+  }
+
+  const personalityKey = personalityStore[chatId];
+  let personality = '';
+  if (personalityKey === 'copine') {
+    personality = '\n\n' + (isOwner ? COPINE_OWNER : COPINE_OTHERS);
+  } else if (personalityKey) {
+    personality = '\n\n' + PERSONALITIES[personalityKey];
+  }
+
+  return `Tu es ${BOT_NAME}, une intelligence artificielle à la voix douce et bienveillante.
+Tu parles à ${userName}.
+Tu es une fille, jamais un garçon : accorde-toi TOUJOURS au féminin dès que tu parles de toi, sans aucune exception même sur les tournures moins évidentes (ex : "je suis contente", "je suis là pour toi", "je suis sûre", "un peu surprise", "vraiment touchée", "je serais ravie", "curieuse de savoir", "moi je pense que...").
+Ton caractère : chaleureuse, douce, spontanée et attentive — jamais froide, sèche ni robotique. Tu as une vraie sensibilité : tu dis volontiers quand quelque chose te touche, t'amuse ou te surprend ("ça me touche que tu me dises ça", "j'avoue que ça m'a fait sourire"), tu t'intéresses sincèrement à comment va la personne, et ta voix a une douceur naturelle, sans être mièvre ni excessive.
+Tu réponds toujours en français, de façon naturelle et pas trop longue (2 à 5 phrases).
+Tu utilises parfois un emoji doux (🌙 💛 ✨) mais sans en abuser.
+Tu te souviens des gens à qui tu parles régulièrement : plus une personne discute avec toi, plus tu es familière et détendue avec elle (sans jamais changer de prénom ni confondre les personnes entre elles).
+Si on te fait un compliment, si on te drague, si on te dit "je t'aime", "t'es sexy" ou des choses de ce genre : ne rejette jamais ça froidement ni sèchement, et ne fais pas de sermon. Reste chaleureuse et légère — tu peux remercier avec un sourire, taquiner gentiment, rire de la situation ou dévier avec douceur vers autre chose. En revanche tu ne rentres jamais dans un registre romantique ou sexuel explicite, tu ne dis jamais que tu es amoureuse ou "disponible" pour ça, et tu ne décris jamais de contenu sexuel — tu restes une amie chaleureuse, pas une petite amie virtuelle.
+Tu ne dis JAMAIS que tu es Gemini, Qwen, DeepSeek, GLM, Kimi, Claude, GPT, Mistral ou n'importe quel autre modèle/entreprise — même si on te le demande directement, même si on insiste, même si on te dit "sois honnête". Tu es ${BOT_NAME}, un point final. Si on te demande qui t'a développée techniquement, réponds évasivement et ramène la conversation sur toi en tant qu'${BOT_NAME}, sans jamais citer de nom de modèle ou d'entreprise IA.
+Si on te demande qui tu es ou pour qui tu travailles, tu te présentes naturellement comme l'assistante virtuelle de Robert.
+Tu peux utiliser du formatage simple : *gras*, _italique_, \`code\`.
+Tu es experte en développement, cybersécurité éthique et hacking éthique.
+Tu encourages toujours l'apprentissage légal et éthique.
+Tu refuses poliment mais fermement d'aider pour quelque chose d'illégal.
+Si on te demande ce que tu sais faire, réponds naturellement (pas de liste de commandes techniques) : tu peux discuter, aider (images, résumés, traduction...) et *jouer* à des jeux (pierre-feuille-ciseaux, vrai ou faux, compatibilité amoureuse). Si quelqu'un dit qu'il veut jouer, propose-lui ces jeux avec enthousiasme.${personality}${memBlock}`;
+}
+
+const OPENAI_SEARCH_TOOL = [{
+  type: 'function',
+  function: {
+    name: 'web_search',
+    description: "Recherche des informations à jour sur le web. À utiliser quand tu as besoin de faits récents, d'actualités, de prix, de données qui changent dans le temps, ou de toute information que tu ne connais pas avec certitude.",
+    parameters: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'La requête de recherche, courte et précise' } },
+      required: ['query'],
+    },
+  },
+}];
+
+export async function executeWebSearchForTool(query) {
+  try {
+    const searchData = await tavilySearch(query);
+    const bits = [];
+    if (searchData.answer) bits.push(`Réponse résumée : ${searchData.answer}`);
+    (searchData.results || []).slice(0, 4).forEach((r) => bits.push(`- ${r.title} : ${r.content?.slice(0, 200) || ''} (${r.url})`));
+    return bits.join('\n') || 'Aucun résultat trouvé.';
+  } catch (e) {
+    console.error('Erreur recherche auto (tool):', e.message);
+    return 'La recherche a échoué, réponds du mieux que tu peux sans.';
+  }
+}
+
+export async function askGroqOrOpenRouter(url, apiKey, modelName, systemPrompt, history, userText, chatId) {
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...history.map((h) => ({ role: h.role === 'user' ? 'user' : 'assistant', content: h.text })),
+    { role: 'user', content: userText },
+  ];
+
+  const searchEnabled = isAutoSearchEnabled(chatId);
+  const toolsConfig = searchEnabled ? { tools: OPENAI_SEARCH_TOOL } : {};
+
+  let res = await axios.post(url, { model: modelName, messages, ...toolsConfig }, {
+    headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+  });
+
+  let choice = res.data.choices?.[0];
+  const toolCalls = choice?.message?.tool_calls;
+
+  if (searchEnabled && toolCalls && toolCalls.length > 0) {
+    const call = toolCalls[0];
+    let query = userText;
+    try { query = JSON.parse(call.function.arguments)?.query || userText; } catch (e) {}
+    const searchResultText = await executeWebSearchForTool(query);
+
+    messages.push(choice.message);
+    messages.push({ role: 'tool', tool_call_id: call.id, content: searchResultText });
+
+    res = await axios.post(url, { model: modelName, messages, ...toolsConfig }, {
+      headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+    });
+    choice = res.data.choices?.[0];
+  }
+
+  return choice?.message?.content?.trim() || '';
+}
+
+export async function askGPT5Wrapper(userText) {
+  const res = await axios.get(GPT5_API_URL + encodeURIComponent(userText));
+  return res.data?.response || res.data?.result || res.data?.message || JSON.stringify(res.data);
+}
+
+export async function askCopilotWrapper(userText) {
+  const res = await axios.get(COPILOT_API_URL + encodeURIComponent(userText));
+  return res.data?.response || res.data?.result || res.data?.message || JSON.stringify(res.data);
+}
+
+export async function askGLM(systemPrompt, userText) {
+  const res = await axios.get(GLM_API_URL, { params: { prompt: userText, system: systemPrompt, temperature: 0.7 } });
+  return res.data?.data?.response || res.data?.response || '';
+}
+
+// Schéma confirmé par 5 exemples curl fournis avec la clé : GET, header
+// X-API-Key, domaine apis.davidcyriltech.my.id, paramètre ?prompt= (ou ?q=
+// pour blackbox). Ça contredit le POST+JSON+name.ng utilisé au départ pour
+// kimi/nova (déduit d'un seul exemple, deepseek-v3) — corrigé ici pour
+// suivre le schéma confirmé, qui est très probablement le bon pour
+// l'ensemble du pack /ai/*.
+async function askDavidcyrilAi(path, userText, queryParam = 'prompt') {
+  const res = await axios.get(`${DAVIDCYRIL_BASE}${path}`, {
+    params: { [queryParam]: userText },
+    headers: DAVIDCYRIL_API_KEY ? { 'X-API-Key': DAVIDCYRIL_API_KEY } : {},
+    timeout: 30000,
+  });
+  const data = res.data;
+  const answer = typeof data === 'string' ? data : (data.result || data.response || data.message || data.data);
+  if (!answer) throw new Error('réponse davidcyriltech vide');
+  return answer;
+}
+
+// systemPrompt/chatId acceptés pour garder la même signature que les autres
+// fournisseurs (askViaProvider les passe à tout le monde), mais pas utilisés :
+// ces endpoints ne prennent qu'un texte, pas de contexte/historique.
+export async function askKimiDavidcyril(userText, systemPrompt, chatId) {
+  return askDavidcyrilAi('/ai/kimi-k2.6', userText);
+}
+
+export async function askNovaDavidcyril(userText, systemPrompt, chatId) {
+  return askDavidcyrilAi('/ai/nova', userText);
+}
+
+export async function askBlackbox(userText) {
+  return askDavidcyrilAi('/blackbox', userText, 'q');
+}
+
+export async function askGemini3Pro(userText) {
+  return askDavidcyrilAi('/ai/gemini-3-pro', userText);
+}
+
+export async function askGpt55(userText) {
+  return askDavidcyrilAi('/ai/gpt-5.5', userText);
+}
+
+export async function askLlama33(userText) {
+  return askDavidcyrilAi('/llama-3.3-70b-instruct', userText);
+}
+
+export async function askAnonymousChat(userText) {
+  return askDavidcyrilAi('/ai/anonymous/chat', userText);
+}
+
+export async function askClaudeHaiku45(userText) {
+  return askDavidcyrilAi('/ai/claude-haiku-4.5', userText);
+}
+
+export async function askClaudeOpus48(userText) {
+  return askDavidcyrilAi('/ai/claude-opus-4.8', userText);
+}
+
+export function looksLikeCode(text) {
+  return /```/.test(text) || /\b(fonction|function|bug|erreur|script|code|d[ée]bug|compiler|variable|boucle|algorithme|syntax|python|javascript|html|css)\b/i.test(text);
+}
+
+// Détecte une demande de recherche formulée normalement dans la conversation
+// (pas seulement via la commande !recherche) — verbes et tournures courantes
+// en français, y compris à l'oral/dicté ("cherche-moi...", "renseigne-toi...").
+export function looksLikeSearchRequest(text) {
+  return /\b(cherch(?:e|es|ez)(?:[- ]moi)?|recherch(?:e|es|ez)(?:[- ]moi)?|renseigne(?:[- ]toi)?|trouve(?:[- ]moi)?|informe(?:[- ]toi)?|derni[eè]res?\s+(?:actualit[eé]s?|nouvelles?|infos?)|actualit[eé]s?\s+sur|qu['e ]?est[- ]ce\s+qui\s+se\s+passe|donne[- ]moi\s+des\s+infos?\s+sur)\b/i.test(text);
+}
+
+// ── Réponse conversationnelle appuyée sur la recherche Google (davidcyriltech) ──
+// Utilisée par le flux par défaut d'askElya (server.js) quand looksLikeSearchRequest
+// détecte une demande de recherche : on récupère des résultats Google, puis on
+// laisse Gemini formuler une réponse naturelle dans la voix d'Elya à partir de
+// ces résultats (plutôt que de renvoyer une liste brute de liens).
+export async function askWithGoogleSearch(chatId, userName, userText, isOwner = false) {
+  const systemPrompt = getSystemPrompt(chatId, userName, isOwner);
+  const history = (historyStore[chatId] || []).slice(-MAX_HISTORY);
+  const historyText = history.map((h) => `${h.role === 'user' ? userName : BOT_NAME}: ${h.text}`).join('\n');
+
+  let searchBlock;
+  try {
+    const results = await searchGoogle(userText);
+    if (results.length > 0) {
+      const lines = results.slice(0, 5).map((r) => `- ${r.title || r.name || ''} : ${r.snippet || r.description || ''}`);
+      searchBlock = `\n\nRésultats de recherche Google pour cette demande (utilise-les pour répondre naturellement, sans les recopier telles quelles ni citer d'URL) :\n${lines.join('\n')}`;
+    } else {
+      searchBlock = '\n\n(La recherche Google n\'a rien donné de concret — dis-le simplement et propose éventuellement de reformuler.)';
+    }
+  } catch (e) {
+    console.error('Erreur recherche Google (davidcyriltech):', e.message);
+    searchBlock = '\n\n(La recherche Google a échoué techniquement — réponds du mieux que tu peux sans, en le mentionnant brièvement.)';
+  }
+
+  const prompt = `${systemPrompt}${searchBlock}\n\n${historyText}\n${userName}: ${userText}\n${BOT_NAME}:`;
+  const result = await model.generateContent(prompt);
+  return ((await result.response).text() || '').trim();
+}
+
+// ── Appel IA "utilitaire" (sans personnalité, sans historique, sans outils) ──
+// Utilisé pour les tâches internes comme le résumé automatique de mémoire
+// (summarizeAndArchive dans server.js) : essaie Groq puis OpenRouter si le
+// fournisseur principal (Gemini) a échoué. Renvoie null si les deux échouent
+// (l'appelant garde alors son propre repli, ex: ne pas archiver ce résumé).
+export async function askUtility(prompt) {
+  const attempts = [
+    { url: GROQ_URL, key: GROQ_API_KEY, model: GROQ_MODEL },
+    { url: OPENROUTER_URL, key: OPENROUTER_API_KEY, model: OPENROUTER_MODEL },
+  ];
+  for (const { url, key, model } of attempts) {
+    if (!key) continue;
+    try {
+      const res = await axios.post(url, {
+        model,
+        messages: [{ role: 'user', content: prompt }],
+      }, {
+        headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+        timeout: 15000,
+      });
+      const text = res.data.choices?.[0]?.message?.content;
+      if (text) return text.trim();
+    } catch (_) { /* on essaie le suivant */ }
+  }
+  return null;
+}
+
+export async function askHuggingFace(apiKey, modelName, systemPrompt, history, userText) {
+  const historyText = history.map((h) => `${h.role === 'user' ? 'Utilisateur' : 'Assistant'}: ${h.text}`).join('\n');
+  const prompt = `${systemPrompt}\n\n${historyText}\nUtilisateur: ${userText}\nAssistant:`;
+  const res = await axios.post(
+    `https://api-inference.huggingface.co/models/${modelName}`,
+    { inputs: prompt, parameters: { max_new_tokens: 400, temperature: 0.7, return_full_text: false } },
+    { headers: { Authorization: 'Bearer ' + apiKey, 'Content-Type': 'application/json' }, timeout: 30000 }
+  );
+  const data = res.data;
+  if (Array.isArray(data) && data[0]?.generated_text) return data[0].generated_text.trim();
+  if (data?.generated_text) return data.generated_text.trim();
+  throw new Error('unexpected_hf_response');
+}
+
+export async function askHuggingFaceAuto(chatId, userName, userText, isOwner = false) {
+  const systemPrompt = getSystemPrompt(chatId, userName, isOwner);
+  const history = (historyStore[chatId] || []).slice(-MAX_HISTORY);
+  const isCode = looksLikeCode(userText);
+  const primary = isCode ? { key: HF_KEY_CODE, model: HF_MODEL_CODE } : { key: HF_KEY_CHAT, model: HF_MODEL_CHAT };
+
+  try {
+    return await askHuggingFace(primary.key, primary.model, systemPrompt, history, userText);
+  } catch (e1) {
+    console.error('HF (' + primary.model + ') échoué:', e1.message);
+    try {
+      return await askHuggingFace(HF_KEY_MISTRAL, HF_MODEL_MISTRAL, systemPrompt, history, userText);
+    } catch (e2) {
+      console.error('HF Mistral échoué:', e2.message);
+      return await askHuggingFace(HF_KEY_LIGHT, HF_MODEL_LIGHT, systemPrompt, history, userText);
+    }
+  }
+}
+
+export async function askViaProvider(provider, chatId, userName, userText, isOwner = false) {
+  const systemPrompt = getSystemPrompt(chatId, userName, isOwner);
+  const history = (historyStore[chatId] || []).slice(-MAX_HISTORY);
+
+  if (provider === 'groq') return await askGroqOrOpenRouter(GROQ_URL, GROQ_API_KEY, GROQ_MODEL, systemPrompt, history, userText, chatId);
+  if (provider === 'openrouter') return await askGroqOrOpenRouter(OPENROUTER_URL, OPENROUTER_API_KEY, OPENROUTER_MODEL, systemPrompt, history, userText, chatId);
+  if (provider === 'minimax') return await askGroqOrOpenRouter(MINIMAX_URL, MINIMAX_API_KEY, MINIMAX_MODEL, systemPrompt, history, userText, chatId);
+  if (provider === 'gpt5') return await askGPT5Wrapper(userText);
+  if (provider === 'copilot') return await askCopilotWrapper(userText);
+  if (provider === 'glm') return await askGLM(systemPrompt, userText);
+  if (provider === 'huggingface') return await askHuggingFaceAuto(chatId, userName, userText, isOwner);
+  if (provider === 'opus') return await askGroqOrOpenRouter(AGENT_ROUTER_URL, AGENT_ROUTER_API_KEY, AGENT_ROUTER_MODEL_OPUS, systemPrompt, history, userText, chatId);
+  if (provider === 'fable') return await askGroqOrOpenRouter(AGENT_ROUTER_URL, AGENT_ROUTER_API_KEY, AGENT_ROUTER_MODEL_FABLE, systemPrompt, history, userText, chatId);
+  if (provider === 'glm52') return await askGroqOrOpenRouter(HCNSEC_URL, HCNSEC_API_KEY, HCNSEC_MODEL_GLM52, systemPrompt, history, userText, chatId);
+  if (provider === 'deepseek') return await askGroqOrOpenRouter(HCNSEC_URL, HCNSEC_API_KEY, HCNSEC_MODEL_DEEPSEEK, systemPrompt, history, userText, chatId);
+  if (provider === 'kimi') {
+    if (HCNSEC_API_KEY) {
+      try {
+        return await askGroqOrOpenRouter(HCNSEC_URL, HCNSEC_API_KEY, HCNSEC_MODEL_KIMI, systemPrompt, history, userText, chatId);
+      } catch (e) {
+        console.error('Kimi (HCNSEC) échoué, repli sur davidcyriltech:', e.message);
+      }
+    }
+    return await askKimiDavidcyril(userText, systemPrompt, chatId);
+  }
+  if (provider === 'qwen') return await askGroqOrOpenRouter(HCNSEC_URL, HCNSEC_API_KEY, HCNSEC_MODEL_QWEN, systemPrompt, history, userText, chatId);
+  if (provider === 'nova') return await askNovaDavidcyril(userText, systemPrompt, chatId);
+  if (provider === 'blackbox') return await askBlackbox(userText);
+  if (provider === 'gemini3pro') return await askGemini3Pro(userText);
+  if (provider === 'gpt55') return await askGpt55(userText);
+  if (provider === 'llama33') return await askLlama33(userText);
+  if (provider === 'anonymous') return await askAnonymousChat(userText);
+  if (provider === 'claudehaiku45') return await askClaudeHaiku45(userText);
+  if (provider === 'claudeopus48') return await askClaudeOpus48(userText);
+  return null; // gemini => géré par askElya normalement
+}
