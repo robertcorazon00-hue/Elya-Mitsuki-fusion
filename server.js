@@ -623,6 +623,11 @@ async function startBot() {
   runtime.setSock(sock);
   sock.ev.on('creds.update', saveCreds);
 
+  // Référence au setTimeout qui redemande un pairing code — on l'annule si la
+  // connexion s'ouvre avant qu'il ne se déclenche (sinon il redemande un code
+  // en plein milieu d'une session déjà connectée, ce qui casse tout).
+  let pairingTimeout = null;
+
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
     if (qr) {
@@ -633,6 +638,7 @@ async function startBot() {
         .catch((e) => console.error('Erreur génération QR pour Telegram:', e.message));
     }
     if (connection === 'close') {
+      if (pairingTimeout) clearTimeout(pairingTimeout);
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       if (shouldReconnect) {
@@ -643,6 +649,7 @@ async function startBot() {
         sendTelegramText('🔴 Elya Prime déconnectée de WhatsApp (logged out). Reconnexion manuelle nécessaire.');
       }
     } else if (connection === 'open') {
+      if (pairingTimeout) clearTimeout(pairingTimeout);
       console.log(`🌸 ${BOT_NAME} & Mitsuki Kiryu-MD connectés sur le même socket !`);
       sendTelegramText('🟢 Elya Prime est connectée à WhatsApp et prête !');
     }
@@ -650,7 +657,11 @@ async function startBot() {
 
   if (!state.creds.registered) {
     if (USE_PAIRING_CODE && PAIRING_NUMBER) {
-      setTimeout(async () => {
+      pairingTimeout = setTimeout(async () => {
+        // Re-vérifie juste avant d'envoyer : si la connexion a réussi entre-temps
+        // (cas du redémarrage obligatoire juste après un pairing réussi), on
+        // n'envoie surtout pas un second code qui casserait la session active.
+        if (state.creds.registered) return;
         try {
           const code = await sock.requestPairingCode(PAIRING_NUMBER);
           console.log(`\n🌸 Ton pairing code : ${code}\n`);
