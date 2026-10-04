@@ -65,7 +65,7 @@ export async function groupStatus(sock, msg, customText) {
         text: buildGroupStatusCard(customText),
         contextInfo: { mentionedJid: participants, isGroupStatus: true },
       },
-      { backgroundColor: '#000000', statusJidList: participants }
+      { backgroundColor: '#000000', statusJidList: participants, broadcast: true }
     );
     await sock.sendMessage(groupJid, { text: '🌸 Statut texte publié avec succès.' });
     return;
@@ -99,7 +99,7 @@ export async function groupStatus(sock, msg, customText) {
 
   const buffer = await downloadMediaMessage(quotedFullMsg, 'buffer', {});
   const contextInfoOut = { mentionedJid: participants, isGroupStatus: true };
-  const sendOpts = { statusJidList: participants };
+  const sendOpts = { statusJidList: participants, broadcast: true };
 
   if (mediaType === 'image') {
     await sock.sendMessage(
