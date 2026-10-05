@@ -88,7 +88,26 @@ body{background:var(--bg);color:var(--text);font-family:'Inter',-apple-system,Bl
     </div>
   </div>
 
-  <div class="grid">
+  <div class="section" id="connectionSection" style="margin-top:24px;">
+    <h2>📶 Connexion WhatsApp</h2>
+    <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:center;margin-top:12px">
+      <div>
+        <div style="font-size:13px;color:var(--text-soft)">Statut</div>
+        <div id="waStatusText" style="font-size:16px;font-weight:600;margin-top:4px">Chargement...</div>
+      </div>
+      <div>
+        <div style="font-size:13px;color:var(--text-soft)">Quota Gemini aujourd'hui</div>
+        <div id="geminiQuotaText" style="font-size:16px;font-weight:600;margin-top:4px">–</div>
+      </div>
+      <button class="btn" id="regenPairingBtn" onclick="regeneratePairing()" style="margin-left:auto">🔄 Régénérer le pairing code</button>
+    </div>
+    <p style="color:var(--text-soft);font-size:12px;margin-top:10px">
+      Ça efface la session WhatsApp en cours et relance la connexion sans attendre un redéploiement Render.
+      Le nouveau code arrive sur Telegram (Elya Prime Notify) en quelques secondes — tiens-toi prêt(e) avant de cliquer.
+    </p>
+  </div>
+
+  <div class="grid" style="margin-top:24px">
     <div class="card">
       <div class="card-value" id="statMessages">0</div>
       <div class="card-label">Messages totaux</div>
@@ -303,7 +322,47 @@ function initDashboard(key) {
   fetchStats(key);
   loadLogs();
   loadScheduledSends();
+  fetchConnectionStatus(key);
   setInterval(() => fetchStats(key), 5000);
+  setInterval(() => fetchConnectionStatus(key), 10000);
+}
+
+function fetchConnectionStatus(key) {
+  fetch('/api/connection-status?key=' + encodeURIComponent(key))
+    .then(r => r.json())
+    .then(data => {
+      const statusEl = document.getElementById('waStatusText');
+      const quotaEl = document.getElementById('geminiQuotaText');
+      if (!statusEl || !quotaEl) return;
+      if (data.connected) {
+        const since = data.since ? new Date(data.since) : null;
+        const mins = since ? Math.max(0, Math.round((Date.now() - since.getTime()) / 60000)) : null;
+        statusEl.textContent = '🟢 Connecté' + (mins !== null ? ' (depuis ' + mins + ' min)' : '');
+      } else {
+        statusEl.textContent = '🔴 Déconnecté' + (data.lastDisconnectReason ? ' — ' + data.lastDisconnectReason : '');
+      }
+      const q = data.geminiQuota || {};
+      quotaEl.textContent = (q.count ?? '–') + ' / ' + (q.limit ?? '–') + ' requêtes';
+    })
+    .catch(() => {});
+}
+
+function regeneratePairing() {
+  if (!confirm('Ça va couper la session WhatsApp en cours et en redemander une nouvelle. Continuer ?')) return;
+  const btn = document.getElementById('regenPairingBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Reconnexion...';
+  fetch('/api/regenerate-pairing?key=' + encodeURIComponent(API_KEY), { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      alert(data.message || 'Reconnexion lancée.');
+    })
+    .catch(() => alert('Erreur lors de la relance.'))
+    .finally(() => {
+      btn.disabled = false;
+      btn.textContent = '🔄 Régénérer le pairing code';
+      fetchConnectionStatus(API_KEY);
+    });
 }
 
 function fetchStats(key) {
