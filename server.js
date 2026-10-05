@@ -18,6 +18,7 @@ import cors from 'cors';
 import http from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import crypto from 'crypto';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -83,6 +84,11 @@ if (!DASHBOARD_PASSWORD) {
 }
 
 runtime.setConfig({ TARGET_LINKS_GROUP });
+
+// ─────────────────────────────────────────────────────────────────────────
+// Statut de connexion WhatsApp, exposé au dashboard (voir /api/connection-status)
+// ─────────────────────────────────────────────────────────────────────────
+let waConnectionStatus = { connected: false, since: null, lastDisconnectReason: null };
 
 // ─────────────────────────────────────────────────────────────────────────
 // Dashboard : Express + Socket.io
@@ -201,6 +207,27 @@ app.post('/api/scheduled-sends/:id/cancel', requireKey, async (req, res) => {
   res.json({ ok: !!cancelled });
 });
 
+app.get('/api/connection-status', requireKey, (req, res) => {
+  res.json({
+    ...waConnectionStatus,
+    geminiQuota: { ...geminiQuota, limit: GEMINI_DAILY_LIMIT },
+  });
+});
+
+// Relance la connexion WhatsApp depuis zéro (nouveau pairing code) sans avoir
+// besoin d'un redéploiement Render — supprime juste la session locale et
+// redémarre le socket Baileys dans le process déjà en cours.
+app.post('/api/regenerate-pairing', requireKey, async (req, res) => {
+  try {
+    try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) { /* dossier déjà absent, pas grave */ }
+    waConnectionStatus = { connected: false, since: null, lastDisconnectReason: null };
+    startBot();
+    res.json({ ok: true, message: 'Reconnexion lancée — le nouveau code arrive sur Telegram (Elya Prime Notify) dans quelques secondes.' });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 io.on('connection', () => {
   // Rien à faire à la connexion : le dashboard s'abonne lui-même à 'statsUpdate'.
 });
@@ -211,7 +238,20 @@ io.on('connection', () => {
 // resté dans server.js)". Gère l'historique, la mémoire, et le routage entre
 // Gemini (par défaut) et les autres fournisseurs (!ia <provider>).
 // ─────────────────────────────────────────────────────────────────────────
+// Compteur approximatif du quota Gemini gratuit (20 requêtes/jour). Remis à
+// zéro automatiquement au changement de date (heure du serveur). C'est une
+// estimation en mémoire (perdue à chaque redéploiement) — pas une lecture
+// exacte du quota Google, juste de quoi savoir où on en est dans la journée.
+const GEMINI_DAILY_LIMIT = 20;
+let geminiQuota = { count: 0, date: new Date().toISOString().slice(0, 10) };
+function trackGeminiCall() {
+  const today = new Date().toISOString().slice(0, 10);
+  if (geminiQuota.date !== today) geminiQuota = { count: 0, date: today };
+  geminiQuota.count += 1;
+}
+
 async function askGeminiDirect(chatId, userName, userText, isOwner) {
+  trackGeminiCall();
   const systemPrompt = getSystemPrompt(chatId, userName, isOwner);
   const history = (historyStore[chatId] || []).slice(-MAX_HISTORY);
   const historyText = history.map((h) => `${h.role === 'user' ? userName : BOT_NAME}: ${h.text}`).join('\n');
@@ -641,15 +681,17 @@ async function startBot() {
       if (pairingTimeout) clearTimeout(pairingTimeout);
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      waConnectionStatus = { connected: false, since: null, lastDisconnectReason: shouldReconnect ? 'reconnexion automatique en cours' : 'déconnecté (logged out)' };
       if (shouldReconnect) {
         console.log('🌸 Connexion perdue, nouvelle tentative dans 5s...');
         setTimeout(startBot, 5000);
       } else {
         console.log('🌸 Déconnecté (logged out). Supprime le dossier auth_info et relance.');
-        sendTelegramText('🔴 Elya Prime déconnectée de WhatsApp (logged out). Reconnexion manuelle nécessaire.');
+        sendTelegramText('🔴 Elya Prime déconnectée de WhatsApp (logged out). Reconnexion manuelle nécessaire — depuis le dashboard (bouton "Régénérer le code") ou via Render.');
       }
     } else if (connection === 'open') {
       if (pairingTimeout) clearTimeout(pairingTimeout);
+      waConnectionStatus = { connected: true, since: new Date().toISOString(), lastDisconnectReason: null };
       console.log(`🌸 ${BOT_NAME} & Mitsuki Kiryu-MD connectés sur le même socket !`);
       sendTelegramText('🟢 Elya Prime est connectée à WhatsApp et prête !');
     }
