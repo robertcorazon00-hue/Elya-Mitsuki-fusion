@@ -9,7 +9,7 @@ export const VERSION = '1.0.0';
 // 'Public' par défaut ; owner.setMode() change bot.mode via storage, mais cette
 // constante reste le libellé statique affiché dans .menu (comme dans l'original).
 export const MODE = 'Public';
-export const CHANNEL_URL = 'https://whatsapp.com/channel/0029Vb7tzDqJpe8eHX2v3i3z';
+export const CHANNEL_URL = 'https://whatsapp.com/channel/0029Vb8iDBrEVccLehLB752j';
 
 // Endpoints API (cod3uchiha + maxxtech)
 export const API = {
