@@ -138,6 +138,19 @@ export async function setTranscribe(chatId, enabled) {
   emitStats();
 }
 
+// ─── Avertissement générique (incrémente le même compteur que les mots
+// bannis — visible via !strikes) : utilisé aussi par l'anti-flood. ───
+export async function addStrike(userId, chatId) {
+  if (!store.strikesStore[chatId]) store.strikesStore[chatId] = {};
+  if (!store.strikesStore[chatId][userId]) store.strikesStore[chatId][userId] = 0;
+
+  store.strikesStore[chatId][userId]++;
+  await store.saveData('strikes', store.strikesStore);
+  emitStats();
+
+  return store.strikesStore[chatId][userId];
+}
+
 // ─── Modération : mots bannis -> strikes ───
 export async function checkModeration(text, userId, chatId) {
   const lower = text.toLowerCase();
@@ -153,14 +166,8 @@ export async function checkModeration(text, userId, chatId) {
 
   if (!triggered) return { strike: false, count: 0 };
 
-  if (!store.strikesStore[chatId]) store.strikesStore[chatId] = {};
-  if (!store.strikesStore[chatId][userId]) store.strikesStore[chatId][userId] = 0;
-
-  store.strikesStore[chatId][userId]++;
-  await store.saveData('strikes', store.strikesStore);
-  emitStats();
-
-  return { strike: true, count: store.strikesStore[chatId][userId] };
+  const count = await addStrike(userId, chatId);
+  return { strike: true, count };
 }
 
 export async function saveAndForwardLink(url, sourceChat, sender, senderName, sockForForward, messageText) {
