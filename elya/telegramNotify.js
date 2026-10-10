@@ -36,6 +36,54 @@ export async function sendTelegramText(text) {
   }
 }
 
+// Écoute (polling simple, pas de webhook) les messages envoyés par CHAT_ID à
+// ce bot Telegram, pour pouvoir déclencher des actions à distance — pour
+// l'instant juste /redemarrer, qui relance la connexion WhatsApp (nouveau
+// pairing code) sans avoir besoin d'ouvrir le dashboard ou Render.
+// Sécurité : seuls les messages venant de CHAT_ID (celui configuré en .env,
+// donc toi) sont pris en compte — tout le reste est ignoré.
+let lastUpdateId = 0;
+let pollingStarted = false;
+
+export function startTelegramCommandListener({ onRestart, getStatusText } = {}) {
+  if (!enabled || pollingStarted) return;
+  pollingStarted = true;
+
+  const poll = async () => {
+    try {
+      const { data } = await axios.get(`${API}/getUpdates`, {
+        params: { offset: lastUpdateId + 1, timeout: 0 },
+        timeout: 10000,
+      });
+      for (const update of data?.result || []) {
+        lastUpdateId = Math.max(lastUpdateId, update.update_id);
+        const msg = update.message;
+        if (!msg || String(msg.chat?.id) !== String(CHAT_ID)) continue;
+        const text = (msg.text || '').trim().toLowerCase();
+        if ((text === '/redemarrer' || text === '/restart') && onRestart) {
+          await sendTelegramText('🔄 Redémarrage demandé depuis Telegram — relance de la connexion WhatsApp...');
+          try {
+            await onRestart();
+          } catch (e) {
+            await sendTelegramText(`⚠️ Erreur pendant le redémarrage : ${e.message}`);
+          }
+        } else if (text === '/status' && getStatusText) {
+          try {
+            await sendTelegramText(getStatusText());
+          } catch (e) {
+            await sendTelegramText(`⚠️ Erreur en récupérant le statut : ${e.message}`);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Erreur polling Telegram:', e.response?.data?.description || e.message);
+    } finally {
+      setTimeout(poll, 4000);
+    }
+  };
+  poll();
+}
+
 export async function sendTelegramPhoto(buffer, caption) {
   if (!enabled) return;
   try {
