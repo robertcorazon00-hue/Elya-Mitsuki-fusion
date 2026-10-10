@@ -37,9 +37,24 @@ import { getCommandStats as getMitsukiCommandStats } from './mitsuki/storage.js'
 // ── Elya (préfixe "!") ──────────────────────────────────────────────────────
 import { BOT_NAME, PREFIX, MAX_HISTORY, OWNER_NUMBERS, isOwner } from './elya/config.js';
 import { model, genAI, generateImage, generateNanoBananaImage } from './elya/ai.js';
-import { askViaProvider, getSystemPrompt, askUtility, looksLikeCode, looksLikeSearchRequest, askWithGoogleSearch } from './elya/providers.js';
+import { askViaProvider, getSystemPrompt, askUtility, looksLikeCode, looksLikeSearchRequest, askWithGoogleSearch, askMinimaxVision, askMinimaxVideo } from './elya/providers.js';
 import { transcribeLocally, generateTTS } from './elya/media.js';
-import { trackUserMilestone } from './elya/helpers.js';
+import { trackUserMilestone, randomDelayMs, sleep, toSoftItalic } from './elya/helpers.js';
+import { recordMessage as recordFloodMessage, resetFlood } from './elya/antiFlood.js';
+
+// Anti-flood (porté d'Ultra Agent) — réglable via .env.
+const FLOOD_MAX_MESSAGES = parseInt(process.env.FLOOD_MAX_MESSAGES, 10) || 8;
+const FLOOD_WINDOW_SEC = parseInt(process.env.FLOOD_WINDOW_SEC, 10) || 10;
+
+// Délai humain avant l'envoi d'une réponse (inspiré d'Ultra Agent) —
+// réglable via .env, désactivable en mettant les deux à 0.
+const AI_REPLY_DELAY_MIN_MS = parseInt(process.env.AI_REPLY_DELAY_MIN_MS, 10) || 0;
+const AI_REPLY_DELAY_MAX_MS = parseInt(process.env.AI_REPLY_DELAY_MAX_MS, 10) || 0;
+async function humanDelay(sock, chatId, presence) {
+  if (AI_REPLY_DELAY_MAX_MS <= 0) return;
+  try { await sock.sendPresenceUpdate(presence, chatId); } catch (_) {}
+  await sleep(randomDelayMs(AI_REPLY_DELAY_MIN_MS, AI_REPLY_DELAY_MAX_MS));
+}
 import * as elyaPlugins from './elya/pluginLoader.js';
 import { findElyaCommand } from './elya-menu-data.js';
 import * as runtime from './elya/runtime.js';
@@ -56,7 +71,7 @@ import { parseReminder } from './elya/reminderParser.js';
 import { addReminder, startReminderScheduler } from './elya-reminders-scheduler.js';
 import { startMorningScheduler } from './elya-morning-scheduler.js';
 import QRCode from 'qrcode';
-import { sendTelegramText, sendTelegramPhoto } from './elya/telegramNotify.js';
+import { sendTelegramText, sendTelegramPhoto, startTelegramCommandListener } from './elya/telegramNotify.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,7 +103,23 @@ runtime.setConfig({ TARGET_LINKS_GROUP });
 // ─────────────────────────────────────────────────────────────────────────
 // Statut de connexion WhatsApp, exposé au dashboard (voir /api/connection-status)
 // ─────────────────────────────────────────────────────────────────────────
-let waConnectionStatus = { connected: false, since: null, lastDisconnectReason: null };
+let waConnectionStatus = { connected: false, since: null, lastDisconnectReason: null, disconnectedAt: null };
+let watchdogTriggered = false;
+
+// Watchdog : si le bot reste déconnecté plus de 10 min sans que la
+// reconnexion automatique de Baileys n'ait réussi (typiquement après un
+// "logged out" où le code s'arrête volontairement d'essayer), on relance
+// tout seul au lieu d'attendre une action manuelle.
+const WATCHDOG_THRESHOLD_MS = 10 * 60 * 1000;
+setInterval(async () => {
+  if (waConnectionStatus.connected || watchdogTriggered || !waConnectionStatus.disconnectedAt) return;
+  const downSince = new Date(waConnectionStatus.disconnectedAt).getTime();
+  if (Date.now() - downSince < WATCHDOG_THRESHOLD_MS) return;
+  watchdogTriggered = true;
+  console.log('🌸 Watchdog : déconnecté depuis plus de 10 min, redémarrage automatique.');
+  await sendTelegramText('🟠 Watchdog : Elya Prime était déconnectée depuis plus de 10 min, je relance automatiquement la connexion.');
+  try { await regenerateConnection(); } catch (e) { console.error('Erreur watchdog:', e.message); }
+}, 60 * 1000);
 
 // ─────────────────────────────────────────────────────────────────────────
 // Dashboard : Express + Socket.io
@@ -216,12 +247,17 @@ app.get('/api/connection-status', requireKey, (req, res) => {
 
 // Relance la connexion WhatsApp depuis zéro (nouveau pairing code) sans avoir
 // besoin d'un redéploiement Render — supprime juste la session locale et
-// redémarre le socket Baileys dans le process déjà en cours.
+// redémarre le socket Baileys dans le process déjà en cours. Utilisée par le
+// bouton du dashboard ET par la commande /redemarrer sur Telegram.
+async function regenerateConnection() {
+  try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) { /* dossier déjà absent, pas grave */ }
+  waConnectionStatus = { connected: false, since: null, lastDisconnectReason: null };
+  startBot();
+}
+
 app.post('/api/regenerate-pairing', requireKey, async (req, res) => {
   try {
-    try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) { /* dossier déjà absent, pas grave */ }
-    waConnectionStatus = { connected: false, since: null, lastDisconnectReason: null };
-    startBot();
+    await regenerateConnection();
     res.json({ ok: true, message: 'Reconnexion lancée — le nouveau code arrive sur Telegram (Elya Prime Notify) dans quelques secondes.' });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -243,25 +279,30 @@ io.on('connection', () => {
 // estimation en mémoire (perdue à chaque redéploiement) — pas une lecture
 // exacte du quota Google, juste de quoi savoir où on en est dans la journée.
 const GEMINI_DAILY_LIMIT = 20;
-let geminiQuota = { count: 0, date: new Date().toISOString().slice(0, 10) };
+const GEMINI_ALERT_THRESHOLD = 18; // alerte Telegram quand il ne reste presque plus de quota
+let geminiQuota = { count: 0, date: new Date().toISOString().slice(0, 10), alerted: false };
 function trackGeminiCall() {
   const today = new Date().toISOString().slice(0, 10);
-  if (geminiQuota.date !== today) geminiQuota = { count: 0, date: today };
+  if (geminiQuota.date !== today) geminiQuota = { count: 0, date: today, alerted: false };
   geminiQuota.count += 1;
+  if (!geminiQuota.alerted && geminiQuota.count >= GEMINI_ALERT_THRESHOLD) {
+    geminiQuota.alerted = true;
+    sendTelegramText(`🟡 Quota Gemini : ${geminiQuota.count}/${GEMINI_DAILY_LIMIT} requêtes utilisées aujourd'hui. Le repli Groq prendra le relais une fois la limite atteinte.`);
+  }
 }
 
-async function askGeminiDirect(chatId, userName, userText, isOwner) {
+async function askGeminiDirect(chatId, userName, userText, isOwner, sender = null) {
   trackGeminiCall();
-  const systemPrompt = getSystemPrompt(chatId, userName, isOwner);
+  const systemPrompt = getSystemPrompt(chatId, userName, isOwner, sender);
   const history = (historyStore[chatId] || []).slice(-MAX_HISTORY);
-  const historyText = history.map((h) => `${h.role === 'user' ? userName : BOT_NAME}: ${h.text}`).join('\n');
+  const historyText = history.map((h) => `${h.role === 'user' ? (h.userName || userName) : BOT_NAME}: ${h.text}`).join('\n');
   const prompt = `${systemPrompt}\n\n${historyText}\n${userName}: ${userText}\n${BOT_NAME}:`;
   const result = await model.generateContent(prompt);
   const text = (await result.response).text();
   return (text || '').trim();
 }
 
-async function askElya(chatId, userName, userText, isOwner = false) {
+async function askElya(chatId, userName, userText, isOwner = false, sender = null) {
   const provider = aiModelStore[chatId] || 'gemini';
   let reply = null;
 
@@ -271,45 +312,45 @@ async function askElya(chatId, userName, userText, isOwner = false) {
     // sinon conversation normale sur Gemini avec repli Groq s'il échoue.
     if (looksLikeSearchRequest(userText)) {
       try {
-        reply = await askWithGoogleSearch(chatId, userName, userText, isOwner);
+        reply = await askWithGoogleSearch(chatId, userName, userText, isOwner, sender);
       } catch (e) {
         console.error('Recherche Google échouée, repli conversation normale:', e.message);
       }
     } else if (looksLikeCode(userText)) {
       try {
-        reply = await askViaProvider('minimax', chatId, userName, userText, isOwner);
+        reply = await askViaProvider('minimax', chatId, userName, userText, isOwner, sender);
       } catch (e) {
         console.error('MiniMax (code) échoué, repli Gemini:', e.message);
       }
     }
     if (!reply) {
       try {
-        reply = await askGeminiDirect(chatId, userName, userText, isOwner);
+        reply = await askGeminiDirect(chatId, userName, userText, isOwner, sender);
       } catch (e) {
         console.error('Gemini échoué, repli Groq:', e.message);
-        try { reply = await askViaProvider('groq', chatId, userName, userText, isOwner); } catch (_) { /* les deux ont échoué, message générique plus bas */ }
+        try { reply = await askViaProvider('groq', chatId, userName, userText, isOwner, sender); } catch (_) { /* les deux ont échoué, message générique plus bas */ }
       }
     }
   } else if (provider === 'auto') {
     try {
-      reply = await askGeminiDirect(chatId, userName, userText, isOwner);
+      reply = await askGeminiDirect(chatId, userName, userText, isOwner, sender);
     } catch (e) {
       console.error('Gemini (auto) échoué, repli en cascade:', e.message);
       for (const fallback of ['groq', 'openrouter', 'huggingface']) {
         try {
-          reply = await askViaProvider(fallback, chatId, userName, userText, isOwner);
+          reply = await askViaProvider(fallback, chatId, userName, userText, isOwner, sender);
           if (reply) break;
         } catch (_) { /* on essaie le suivant */ }
       }
     }
   } else {
     try {
-      reply = await askViaProvider(provider, chatId, userName, userText, isOwner);
+      reply = await askViaProvider(provider, chatId, userName, userText, isOwner, sender);
     } catch (e) {
       console.error(`Fournisseur ${provider} échoué, repli Gemini:`, e.message);
     }
     if (!reply) {
-      try { reply = await askGeminiDirect(chatId, userName, userText, isOwner); } catch (_) {}
+      try { reply = await askGeminiDirect(chatId, userName, userText, isOwner, sender); } catch (_) {}
     }
   }
 
@@ -326,7 +367,7 @@ async function askElya(chatId, userName, userText, isOwner = false) {
   }
   await saveData('history', historyStore);
 
-  await maybeExtractMemory(chatId, userText);
+  await maybeExtractMemory(chatId, userText, userName);
   return reply;
 }
 
@@ -351,8 +392,13 @@ async function summarizeAndArchive(chatId, userName, droppedMessages) {
     summary = (await askUtility(prompt).catch(() => null))?.trim() || null;
   }
   if (!summary || /^rien\.?$/i.test(summary)) return;
+  // Dans un groupe, plusieurs personnes parlent à Elya dans le même chatId :
+  // on préfixe le souvenir avec le prénom concerné pour ne jamais le
+  // confondre avec celui de quelqu'un d'autre plus tard.
+  const isGroup = chatId.endsWith('@g.us');
+  const attributedSummary = isGroup ? `${userName} : ${summary}` : summary;
   memoryStore[chatId] = memoryStore[chatId] || [];
-  memoryStore[chatId].push({ text: summary, date: Date.now(), fromSummary: true });
+  memoryStore[chatId].push({ text: attributedSummary, date: Date.now(), fromSummary: true });
   if (memoryStore[chatId].length > 80) memoryStore[chatId] = memoryStore[chatId].slice(-80);
   await saveData('memory', memoryStore);
 }
@@ -361,19 +407,28 @@ async function summarizeAndArchive(chatId, userName, droppedMessages) {
 // Complète le résumé IA ci-dessus : capture immédiatement certains signaux
 // clairs (mots-clés) sans attendre que l'historique déborde.
 const MEMORY_CUES = [
+  // Français
   "j'aime", "j'adore", 'je déteste', 'je deteste', 'je préfère', 'je prefere',
   'mon anniversaire', "j'habite", 'je travaille', 'je m\'appelle', 'ma passion',
   'mon copain', 'ma copine', 'mon mari', 'ma femme', 'mon petit ami', 'ma petite amie',
   'mon frère', 'ma sœur', 'ma soeur', 'mes parents', 'mon père', 'ma mère',
   'je suis en couple', 'je suis célibataire', 'je fais des études', "j'étudie",
   'mon métier', 'mon rêve', 'mon objectif', 'ma peur', 'mon problème', 'je stresse',
+  // English — Elya répond maintenant dans la langue de la personne, la détection de mémoire doit suivre
+  'i love', 'i like', 'i hate', 'i prefer', 'my birthday', 'i live in', 'i work',
+  'my name is', 'my passion', 'my boyfriend', 'my girlfriend', 'my husband', 'my wife',
+  'my brother', 'my sister', 'my parents', 'my father', 'my mother',
+  "i'm single", "i'm in a relationship", 'i study', 'my job', 'my dream', 'my goal',
+  'my fear', 'my problem', "i'm stressed",
 ];
-async function maybeExtractMemory(chatId, userText) {
+async function maybeExtractMemory(chatId, userText, userName) {
   const lower = userText.toLowerCase();
   if (!MEMORY_CUES.some((cue) => lower.includes(cue))) return;
   if (userText.length > 300) return; // évite de mémoriser de longs pavés
+  const isGroup = chatId.endsWith('@g.us');
+  const attributedText = isGroup ? `${userName} : ${userText}` : userText;
   memoryStore[chatId] = memoryStore[chatId] || [];
-  memoryStore[chatId].push({ text: userText, date: Date.now() });
+  memoryStore[chatId].push({ text: attributedText, date: Date.now() });
   if (memoryStore[chatId].length > 80) memoryStore[chatId] = memoryStore[chatId].slice(-80);
   await saveData('memory', memoryStore);
 }
@@ -383,12 +438,32 @@ async function analyzeMedia(buffer, mimeType, caption) {
   const prompt = caption?.trim()
     ? caption
     : "Décris et commente ce document en 2 à 4 phrases, avec ton ton chaleureux habituel.";
-  const modelName = process.env.GEMINI_MODEL || 'gemini-flash-latest';
-  const response = await genAI.models.generateContent({
-    model: modelName,
-    contents: [{ role: 'user', parts: [{ text: prompt }, { inlineData: { mimeType, data: buffer.toString('base64') } }] }],
-  });
-  return (response.text || '').trim() || "Je n'ai pas réussi à analyser ce fichier, désolée 💛";
+  try {
+    const modelName = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+    const response = await genAI.models.generateContent({
+      model: modelName,
+      contents: [{ role: 'user', parts: [{ text: prompt }, { inlineData: { mimeType, data: buffer.toString('base64') } }] }],
+    });
+    const text = (response.text || '').trim();
+    if (text) return text;
+    throw new Error('réponse Gemini vide');
+  } catch (e) {
+    console.error('Analyse média Gemini échouée, repli MiniMax:', e.message);
+    // MiniMax comprend les images ET les vidéos, mais pas les PDF bruts en
+    // l'état -> repli possible seulement pour les deux premiers.
+    try {
+      if (mimeType.startsWith('image/')) {
+        const fallback = await askMinimaxVision(prompt, buffer, mimeType);
+        if (fallback) return fallback;
+      } else if (mimeType.startsWith('video/')) {
+        const fallback = await askMinimaxVideo(prompt, buffer, mimeType);
+        if (fallback) return fallback;
+      }
+    } catch (e2) {
+      console.error('Repli MiniMax (vision/vidéo) également échoué:', e2.message);
+    }
+    return "Je n'ai pas réussi à analyser ce fichier, désolée 💛";
+  }
 }
 
 // ── Transcription vocale (local d'abord, AssemblyAI en repli) ────────────
@@ -492,6 +567,19 @@ function attachElyaListener(sock) {
         }
       }
 
+      // ── Anti-flood (groupes uniquement — un DM qui spamme ne gêne que lui-même) ──
+      if (isGroup && text) {
+        const flood = recordFloodMessage(chatId, sender, FLOOD_MAX_MESSAGES, FLOOD_WINDOW_SEC);
+        if (flood.isFlooding) {
+          resetFlood(chatId, sender);
+          const strikeCount = await runtime.addStrike(sender, chatId);
+          await sock.sendMessage(chatId, {
+            text: `⚠️ @${sender.split('@')[0]}, doucement sur les messages — ça spam un peu là 😅 (avertissement ${strikeCount}/3)`,
+            mentions: [sender],
+          }).catch(() => {});
+        }
+      }
+
       // ── Détection & suivi de liens ──
       const links = extractLinks(text);
       if (links.length) {
@@ -513,6 +601,8 @@ function attachElyaListener(sock) {
 
       // ── Silence temporaire actif (!silence) : coupe la conversation, pas les commandes ──
       if (silenceStore[chatId]?.until && silenceStore[chatId].until > Date.now()) return;
+      // ── Silence global actif (!silencetout) : coupe la conversation PARTOUT ──
+      if (silenceStore.__global__?.until && silenceStore.__global__.until > Date.now()) return;
 
       // ── Réaction emoji automatique (présence plus vivante, ~1 message sur 4) ──
       if (reactionsStore[chatId]?.enabled && Math.random() < 0.25) {
@@ -532,13 +622,25 @@ function attachElyaListener(sock) {
         }).catch(() => {});
       }
 
-      // ── Image / PDF envoyés sans commande : analyse automatique ──
+      // ── Image / PDF / Vidéo envoyés sans commande : analyse automatique ──
       const isImage = !!msg.message.imageMessage;
       const isPdf = msg.message.documentMessage?.mimetype === 'application/pdf';
-      if (isImage || isPdf) {
+      const isVideo = !!msg.message.videoMessage;
+      // Vidéos : on limite la taille pour rester raisonnable en mémoire/temps
+      // sur le plan gratuit Render (indépendamment de la limite MiniMax de 50 Mo).
+      const VIDEO_MAX_BYTES = 20 * 1024 * 1024; // 20 Mo
+      if (isVideo && (msg.message.videoMessage.fileLength || 0) > VIDEO_MAX_BYTES) {
+        await sock.sendMessage(chatId, { text: `🎬 Cette vidéo est trop lourde pour que je l'analyse (max ~20 Mo), désolée 💛` });
+        return;
+      }
+      if (isImage || isPdf || isVideo) {
         const buffer = await downloadMediaMessage(msg, 'buffer', {});
-        const mimeType = isImage ? (msg.message.imageMessage.mimetype || 'image/jpeg') : 'application/pdf';
-        await sock.sendPresenceUpdate('composing', chatId).catch(() => {});
+        const mimeType = isImage
+          ? (msg.message.imageMessage.mimetype || 'image/jpeg')
+          : isVideo
+            ? (msg.message.videoMessage.mimetype || 'video/mp4')
+            : 'application/pdf';
+        await sock.sendPresenceUpdate(isVideo ? 'recording' : 'composing', chatId).catch(() => {});
         const analysis = await analyzeMedia(buffer, mimeType, text);
         await sock.sendMessage(chatId, { text: analysis });
         await runtime.recordImage();
@@ -553,20 +655,38 @@ function attachElyaListener(sock) {
           const transcription = await transcribeVoiceMessage(buffer);
           if (!transcription) return;
           await sock.sendMessage(chatId, { text: `🎙️ _"${transcription}"_` });
-          const reply = await askElya(chatId, senderName, transcription, isOwner(sender) || msg.key.fromMe);
+
+          // Vocal long (>60s) : on ajoute un résumé court en plus de la
+          // transcription complète, histoire de ne pas avoir à tout relire.
+          const LONG_VOICE_THRESHOLD_SEC = 60;
+          const durationSec = msg.message.audioMessage.seconds || 0;
+          if (durationSec > LONG_VOICE_THRESHOLD_SEC) {
+            try {
+              const summary = await askUtility(
+                `Résume ce message vocal transcrit en 1 à 2 phrases courtes, en français, en gardant juste l'essentiel :\n\n"${transcription}"`
+              );
+              if (summary) await sock.sendMessage(chatId, { text: `📝 _Résumé : ${summary.trim()}_` });
+            } catch (e3) {
+              console.error('Erreur résumé vocal long:', e3.message);
+              // Pas grave si le résumé échoue : la transcription complète est déjà envoyée au-dessus.
+            }
+          }
+
+          const reply = await askElya(chatId, senderName, transcription, isOwner(sender) || msg.key.fromMe, sender);
           const wantsVoiceReply = voixGlobalStore.enabled || !!voixAutoStore[chatId]?.enabled;
+          await humanDelay(sock, chatId, wantsVoiceReply ? 'recording' : 'composing');
           if (wantsVoiceReply) {
             try {
-              await sock.sendPresenceUpdate('recording', chatId).catch(() => {});
               const audioBuffer = await generateTTS(reply, 'fr');
               await sock.sendMessage(chatId, { audio: audioBuffer, mimetype: 'audio/ogg; codecs=opus', ptt: true });
             } catch (e2) {
               console.error('Erreur TTS réponse (vocal reçu):', e2.message);
-              await sock.sendMessage(chatId, { text: reply });
+              await sock.sendMessage(chatId, { text: toSoftItalic(reply) });
             }
           } else {
-            await sock.sendMessage(chatId, { text: reply });
+            await sock.sendMessage(chatId, { text: toSoftItalic(reply) });
           }
+          try { await sock.sendPresenceUpdate('paused', chatId); } catch (_) {}
         } catch (e) {
           console.error('Erreur transcription vocale:', e.message);
         }
@@ -609,18 +729,20 @@ function attachElyaListener(sock) {
       // ── Conversation libre ──
       if (!text) return;
       await sock.sendPresenceUpdate('composing', chatId).catch(() => {});
-      const reply = await askElya(chatId, senderName, text, isOwner(sender) || msg.key.fromMe);
+      const reply = await askElya(chatId, senderName, text, isOwner(sender) || msg.key.fromMe, sender);
 
       // ── Mode vocal : global (!voixtous, tous les chats) ou local (!voixauto, ce chat) ──
       const wantsVoice = voixGlobalStore.enabled || !!voixAutoStore[chatId]?.enabled;
+      await humanDelay(sock, chatId, wantsVoice ? 'recording' : 'composing');
       if (wantsVoice) {
         try {
-          await sock.sendPresenceUpdate('recording', chatId).catch(() => {});
           const audioBuffer = await generateTTS(reply, 'fr');
           await sock.sendMessage(chatId, { audio: audioBuffer, mimetype: 'audio/ogg; codecs=opus', ptt: true });
         } catch (e) {
           console.error('Erreur TTS réponse auto:', e.message);
-          await sock.sendMessage(chatId, { text: reply }); // repli texte si la synthèse vocale échoue
+          await sock.sendMessage(chatId, { text: toSoftItalic(reply) }); // repli texte si la synthèse vocale échoue
+        } finally {
+          try { await sock.sendPresenceUpdate('paused', chatId); } catch (_) {}
         }
         return;
       }
@@ -633,11 +755,12 @@ function attachElyaListener(sock) {
           const translated = await askGeminiDirect(chatId, senderName, `Traduis ce texte en anglais, réponds uniquement avec la traduction : "${reply}"`);
           await sock.sendMessage(chatId, { text: `${reply}\n\n🌐 ${translated}` });
         } catch (_) {
-          await sock.sendMessage(chatId, { text: reply });
+          await sock.sendMessage(chatId, { text: toSoftItalic(reply) });
         }
       } else {
-        await sock.sendMessage(chatId, { text: reply });
+        await sock.sendMessage(chatId, { text: toSoftItalic(reply) });
       }
+      try { await sock.sendPresenceUpdate('paused', chatId); } catch (_) {}
     } catch (err) {
       console.error('Erreur boucle Elya:', err.message);
     }
@@ -647,6 +770,21 @@ function attachElyaListener(sock) {
 // ─────────────────────────────────────────────────────────────────────────
 // Connexion WhatsApp (Baileys) — instance unique partagée par Mitsuki et Elya
 // ─────────────────────────────────────────────────────────────────────────
+// Message de bienvenue envoyé à chaque owner (son propre numéro) dès que la
+// connexion WhatsApp s'ouvre — inspiré d'Ultra Agent. Court exprès : le menu
+// complet existe déjà via "!menu", pas besoin de le dupliquer ici.
+async function sendStartupWelcome(sock) {
+  if (!PAIRING_NUMBER) return; // pas de numéro connu (connexion par QR) -> rien à faire
+  const text = `🌸 *${BOT_NAME}* est en ligne et prête !\n\n` +
+    `Tape *${PREFIX}menu* pour voir toutes mes commandes.\n` +
+    `Connectée depuis : ${new Date().toLocaleString('fr-FR', { timeZone: 'Africa/Lome' })}`;
+  try {
+    await sock.sendMessage(`${PAIRING_NUMBER}@s.whatsapp.net`, { text });
+  } catch (e) {
+    console.error('Échec message de bienvenue démarrage:', e.message);
+  }
+}
+
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version, isLatest } = await fetchLatestBaileysVersion();
@@ -681,19 +819,26 @@ async function startBot() {
       if (pairingTimeout) clearTimeout(pairingTimeout);
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      waConnectionStatus = { connected: false, since: null, lastDisconnectReason: shouldReconnect ? 'reconnexion automatique en cours' : 'déconnecté (logged out)' };
+      waConnectionStatus = {
+        connected: false,
+        since: null,
+        lastDisconnectReason: shouldReconnect ? 'reconnexion automatique en cours' : 'déconnecté (logged out)',
+        disconnectedAt: waConnectionStatus.disconnectedAt || new Date().toISOString(),
+      };
       if (shouldReconnect) {
         console.log('🌸 Connexion perdue, nouvelle tentative dans 5s...');
         setTimeout(startBot, 5000);
       } else {
         console.log('🌸 Déconnecté (logged out). Supprime le dossier auth_info et relance.');
-        sendTelegramText('🔴 Elya Prime déconnectée de WhatsApp (logged out). Reconnexion manuelle nécessaire — depuis le dashboard (bouton "Régénérer le code") ou via Render.');
+        sendTelegramText('🔴 Elya Prime déconnectée de WhatsApp (logged out). Reconnexion manuelle nécessaire — depuis le dashboard (bouton "Régénérer le code"), via /redemarrer sur Telegram, ou automatiquement par le watchdog d\'ici 10 min.');
       }
     } else if (connection === 'open') {
       if (pairingTimeout) clearTimeout(pairingTimeout);
-      waConnectionStatus = { connected: true, since: new Date().toISOString(), lastDisconnectReason: null };
+      watchdogTriggered = false;
+      waConnectionStatus = { connected: true, since: new Date().toISOString(), lastDisconnectReason: null, disconnectedAt: null };
       console.log(`🌸 ${BOT_NAME} & Mitsuki Kiryu-MD connectés sur le même socket !`);
       sendTelegramText('🟢 Elya Prime est connectée à WhatsApp et prête !');
+      sendStartupWelcome(sock).catch((e) => console.error('Erreur message de bienvenue démarrage:', e.message));
     }
   });
 
@@ -733,3 +878,14 @@ httpServer.listen(PORT, () => {
 });
 
 startBot();
+startTelegramCommandListener({
+  onRestart: regenerateConnection,
+  getStatusText: () => {
+    if (waConnectionStatus.connected) {
+      const mins = Math.max(0, Math.round((Date.now() - new Date(waConnectionStatus.since).getTime()) / 60000));
+      return `🟢 Connectée depuis ${mins} min.\n📊 Quota Gemini : ${geminiQuota.count}/${GEMINI_DAILY_LIMIT} aujourd'hui.`;
+    }
+    const reason = waConnectionStatus.lastDisconnectReason || 'raison inconnue';
+    return `🔴 Déconnectée (${reason}).\n📊 Quota Gemini : ${geminiQuota.count}/${GEMINI_DAILY_LIMIT} aujourd'hui.\n\nTape /redemarrer pour relancer.`;
+  },
+});
