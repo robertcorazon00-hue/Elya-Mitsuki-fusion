@@ -49,13 +49,28 @@ async function convertToOggOpus(inputBuffer) {
   }
 }
 
+// Nettoie le texte avant synthèse vocale : markdown (gras/italique/barré/code),
+// emojis, et espaces en trop — sinon le moteur TTS les lit tels quels
+// ("étoile", le nom de l'emoji, etc.) au lieu de les ignorer.
+export function cleanTextForSpeech(text) {
+  return text
+    // Markdown WhatsApp/standard : *gras*, _italique_, ~barré~, `code`, ```bloc```
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/[*_~`]/g, '')
+    // Emojis et pictos (couvre la grande majorité des plages Unicode emoji)
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{FE0F}\u{200D}]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export async function generateTTS(text, lang) {
+  const spoken = cleanTextForSpeech(text) || text; // si le nettoyage vide tout (texte 100% emoji), on garde l'original en dernier recours
   let raw;
   if (lang === 'fr') {
     try {
       const res = await axios.post(
         `${VOICE_SERVICE_URL}/speak`,
-        { text: text.slice(0, 800) },
+        { text: spoken.slice(0, 800) },
         { responseType: 'arraybuffer', timeout: 8000 }
       );
       raw = Buffer.from(res.data);
@@ -63,7 +78,7 @@ export async function generateTTS(text, lang) {
       // Service vocal local indisponible : on continue avec le repli ci-dessous, sans planter.
     }
   }
-  if (!raw) raw = await generateTTSFallback(text, lang);
+  if (!raw) raw = await generateTTSFallback(spoken, lang);
   try {
     return await convertToOggOpus(raw);
   } catch (e) {
