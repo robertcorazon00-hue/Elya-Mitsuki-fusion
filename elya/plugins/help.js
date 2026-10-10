@@ -23,16 +23,17 @@ export default {
       return;
     }
 
-    const sep = '───────────────';
+    const sep = '┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄';
 
-    const menuHeader = `Elya AI
+    const menuHeader = `💜 *ELYA PRIME* 💜
+_Ton assistante virtuelle, toujours avec toi_ 💛
 
-Voici tout ce que je sais faire, si un jour tu veux aller plus loin que la conversation.
-Sinon, parle-moi juste normalement, pas besoin de commande pour ça.`;
+Coucou, mon étoile ! 💕 Voici tout ce que je sais faire, si un jour tu veux aller plus loin que la conversation.
+Sinon, parle-moi juste normalement — pas besoin de commande pour ça.`;
 
     const menuBody = `${sep}
-
-Général
+👑 *GÉNÉRAL*
+${sep}
 
   ${PREFIX}menu
   ${PREFIX}status
@@ -41,50 +42,57 @@ Général
   ${PREFIX}apropos — c'est quoi Elya Prime ?
 
 ${sep}
+💬 *CONVERSATION*
+${sep}
 
-Conversation
-
-_Envoie-moi juste une photo ou un PDF (avec ou sans légende), je l'analyse automatiquement — pas besoin de commande._
+_Envoie-moi juste une photo, une vidéo ou un PDF (avec ou sans légende), je l'analyse automatiquement — pas besoin de commande._
 
   ${PREFIX}memoire
   ${PREFIX}gouts
   ${PREFIX}personnalite <prof|psy|dev|drole|mamie|copine>
-  ${PREFIX}image <description>
-  ${PREFIX}tts [fr|en] <texte>
-  ${PREFIX}voixauto on|off — répond en note vocale dans ce chat au lieu du texte
-  ${PREFIX}traduction on|off
-  ${PREFIX}pdf <texte>
-  ${PREFIX}drive
-  ${PREFIX}upload <url> — lien temporaire via TmpLink
-  ${PREFIX}setavatar — changer ma photo de profil
   ${PREFIX}humeur [texte] — note ou consulte ton humeur du jour
   ${PREFIX}bonjour on|off / heure HH:MM — message du matin automatique
-  ${PREFIX}rappels / rappels cancel <numéro> — tes rappels en attente
+  ${PREFIX}rappels / rappels cancel <numéro>
+  ${PREFIX}traduction on|off
+  ${PREFIX}silence [durée|illimite] / off — coupe la conversation ici (commandes actives)
+  ${PREFIX}silencetout [durée|illimite] / off — coupe la conversation partout (owners)
 
 _Tu peux aussi juste dire "rappelle-moi de ... dans ..." directement, sans commande._
 
 ${sep}
-
-Autres IA & outils
-
-  ${PREFIX}ia <gemini|groq|openrouter|gpt5|copilot|glm|huggingface|opus|fable|glm52|deepseek|kimi|qwen>
-  ${PREFIX}nanobanana <description>
-  ${PREFIX}pinterest <recherche>
-  ${PREFIX}dictionnaire <mot>
-  ${PREFIX}actu [sujet]
-  ${PREFIX}deepseek <question>
-  ${PREFIX}code <extrait>
-  ${PREFIX}recherche <sujet>
-  ${PREFIX}autosearch on|off — recherche web automatique (activée par défaut)
-  ${PREFIX}diffusion <description> — génère une image (Stable Diffusion)
-  ${PREFIX}writecream <description> — génère une image (Writecream)
-  ${PREFIX}ttsg <texte> — voix Google (alternative à ${PREFIX}tts)
-  ${PREFIX}kimi <question> — Kimi k2.6 (réponse ponctuelle, sans mémoire)
-  ${PREFIX}nova <question> — Nova AI (réponse ponctuelle, sans mémoire)
-
+🎨 *CRÉATIVITÉ*
 ${sep}
 
-Jeux & fun
+  ${PREFIX}image <description>
+  ${PREFIX}diffusion <description> — Stable Diffusion
+  ${PREFIX}writecream <description>
+  ${PREFIX}nanobanana <description>
+  ${PREFIX}quotecard — carte de citation (réponds à un message)
+  ${PREFIX}pdf <texte>
+  ${PREFIX}tts [fr|en] <texte> / ${PREFIX}ttsg <texte> — voix Google
+  ${PREFIX}voixauto on|off — répond en note vocale dans ce chat
+  ${PREFIX}drive
+  ${PREFIX}upload <url> — lien temporaire via TmpLink
+  ${PREFIX}setavatar — changer ma photo de profil
+  ${PREFIX}pinterest <recherche>
+
+${sep}
+🧠 *IA & OUTILS*
+${sep}
+
+  ${PREFIX}ia <gemini|groq|openrouter|ashna|gpt5|copilot|glm|huggingface|opus|fable|glm52|deepseek|kimi|qwen|...>
+  ${PREFIX}deepseek <question>
+  ${PREFIX}kimi <question> — Kimi k2.6 (réponse ponctuelle)
+  ${PREFIX}nova <question> — Nova AI (réponse ponctuelle)
+  ${PREFIX}code <extrait>
+  ${PREFIX}recherche <sujet>
+  ${PREFIX}autosearch on|off — recherche web auto (activée par défaut)
+  ${PREFIX}actu [sujet]
+  ${PREFIX}dictionnaire <mot>
+
+${sep}
+🎮 *FUN & COMPAGNIE*
+${sep}
 
   ${PREFIX}pfc <pierre|feuille|ciseaux>
   ${PREFIX}vraifaux (+ ${PREFIX}vrai/${PREFIX}faux)
@@ -93,78 +101,63 @@ Jeux & fun
   ${PREFIX}startup <mots-clés> / ${PREFIX}slogan <sujet>
 
 ${sep}
-
-Social & groupe
+👥 *VIE DE GROUPE*
+${sep}
 
   ${PREFIX}sondage Question | Opt1 | Opt2
   ${PREFIX}niveau [@user]
-  ${PREFIX}recap [nombre] — résume les derniers messages du groupe
-
-${sep}
-
-Modération
-
+  ${PREFIX}recap [nombre] — résume les derniers messages
   ${PREFIX}regles / ${PREFIX}strikes
-  ${PREFIX}elyaon / ${PREFIX}elyaoff
+  ${PREFIX}elyaon / ${PREFIX}elyaoff — Elya répond à tout, ou juste si mentionnée
   ${PREFIX}antidelete on|off
   ${PREFIX}presentation on|off
   ${PREFIX}milestones on|off
-  ${PREFIX}silence [durée] / off — coupe la conversation ici temporairement (commandes actives)
-
-${sep}
-
-Voix & liens
-
   ${PREFIX}transcribe on|off
   ${PREFIX}liensdetect on|off
-  ${PREFIX}linkdetect on <lien_chaîne> — suivre une chaîne
-  ${PREFIX}chaines — lister les chaînes suivies
-  ${PREFIX}unfollow <numéro|nom> — se désabonner d'une chaîne
-  ${PREFIX}liens [nombre]
-  ${PREFIX}liens chaines [nombre]
+
+${sep}
+🎁 *COFFRE PRIVÉ*
+${sep}
+
+_Types : lien, video, document, image, audio, contact, numero, note, message_
+
+  ${PREFIX}add <type> <nom> <contenu>
+  ${PREFIX}give <type> <nom> — renvoie l'élément
+  ${PREFIX}delete <type> <nom>
+  ${PREFIX}list <type> — voir tous les éléments
+  ${PREFIX}liens [nombre] / ${PREFIX}liens chaines [nombre]
+  ${PREFIX}chaines — chaînes suivies
+  ${PREFIX}unfollow <numéro|nom>
+  ${PREFIX}linkdetect on <lien_chaîne>
   ${PREFIX}setlinkgroup
 
 ${sep}
-
-Coffre (liens, fichiers, contacts...)
-
-_Types : lien, video, document, image, audio, contact, numero, note, message — insensible aux accents/casse_
-
-  ${PREFIX}add <type> <nom> <contenu> — ex: ${PREFIX}add link 1 https://exemple.com
-  ${PREFIX}add image|video|audio|document <nom> — envoie le fichier en légende, ou réponds-y
-  ${PREFIX}add message <texte...> (nom) — le nom entre parenthèses, à la fin
-  ${PREFIX}give <type> <nom> — renvoie l'élément
-  ${PREFIX}delete <type> <nom>
-  ${PREFIX}list <type> — voir tous les noms enregistrés pour ce type
-
+👑 *MES POUVOIRS*
 ${sep}
 
-Avancé
-
-  ${PREFIX}addword <mot>
-  ${PREFIX}delword <mot>
-  ${PREFIX}iastatus — Teste tous les fournisseurs IA
-  ${PREFIX}credits — Suivi d'utilisation IA
-  ${PREFIX}backup — Exporter toutes les données
-  ${PREFIX}logs [n] — Dernières erreurs
-  ${PREFIX}lockdown on|off — Restreindre temporairement les commandes aux owners
-  ${PREFIX}send <destinataire> <heure> (<message>) — programmer un envoi (+ ${PREFIX}send list / ${PREFIX}send cancel <numéro>)
-  ${PREFIX}broadcast <message> — envoyer un message à tous les chats
+  ${PREFIX}iastatus — teste tous les fournisseurs IA
+  ${PREFIX}credits — suivi d'utilisation IA
+  ${PREFIX}backup — exporter toutes les données
+  ${PREFIX}logs [n] — dernières erreurs
+  ${PREFIX}lockdown on|off — restreindre aux owners
+  ${PREFIX}send <destinataire> <heure> (<message>) — programmer un envoi
+  ${PREFIX}broadcast <message> — envoyer à tous les chats
+  ${PREFIX}addword <mot> / ${PREFIX}delword <mot>
 
 ${sep}
+📣 *MON UNIVERS CHAÎNE*
+${sep}
 
-Chaîne
-
-  ${PREFIX}newsletter — JID d'une chaîne (à taper dans la chaîne)
+  ${PREFIX}newsletter — JID d'une chaîne
   ${PREFIX}projet — créer un projet lié à une chaîne
-  ${PREFIX}programmer — programmer une publication (texte/image/vidéo)
-  ${PREFIX}projets — voir les projets et publications
-  ${PREFIX}delprojet <id> [id_post] — supprimer un projet ou une publication
+  ${PREFIX}programmer — programmer une publication
+  ${PREFIX}projets — voir projets et publications
+  ${PREFIX}delprojet <id> [id_post]
   ${PREFIX}annuler — annuler une configuration en cours
 
 En groupe, je détecte aussi les liens partagés et je les sauvegarde automatiquement.
 
-_Créée avec soin par toi_`;
+💜 _Elya Prime — plus qu'un bot... une présence_ 💜`;
 
     await sock.sendMessage(chatId, { text: menuHeader });
     await sock.sendMessage(chatId, { text: menuBody });
