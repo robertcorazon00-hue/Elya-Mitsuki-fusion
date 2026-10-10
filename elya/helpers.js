@@ -17,6 +17,35 @@ export const PERSONALITIES = {
   copine: "Pour cette conversation, tu joues avec Robert un petit jeu de rôle de couple — affectueux et léger, jamais explicite. Avec les autres personnes du chat, tu restes toi-même."
 };
 
+// ─── Écriture douce (italique fine Unicode) pour le style de conversation d'Elya ───
+// Convertit les lettres latines en "Mathematical Sans-Serif Italic" — un style
+// de texte qui s'affiche vraiment en italique fin sur WhatsApp, sans dépendre
+// du formatage markdown (_..._) qui ne marche pas partout pareil. Les chiffres,
+// emojis et ponctuation ne sont pas touchés.
+const ITALIC_UPPER_BASE = 0x1D608; // 'A'
+const ITALIC_LOWER_BASE = 0x1D622; // 'a'
+export function toSoftItalic(text) {
+  if (!text) return text;
+  return text.replace(/[A-Za-z]/g, (ch) => {
+    const code = ch.charCodeAt(0);
+    if (code >= 65 && code <= 90) return String.fromCodePoint(ITALIC_UPPER_BASE + (code - 65));
+    if (code >= 97 && code <= 122) return String.fromCodePoint(ITALIC_LOWER_BASE + (code - 97));
+    return ch;
+  });
+}
+
+// ─── Délai de réponse "humain" (inspiré d'Ultra Agent) ───
+// Un vrai humain ne répond jamais instantanément — on simule un petit temps
+// de réflexion/frappe avant d'envoyer, pour que ça paraisse moins robotique.
+export function randomDelayMs(min, max) {
+  const lo = Math.min(min, max);
+  const hi = Math.max(min, max);
+  return Math.floor(lo + Math.random() * (hi - lo));
+}
+export function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // ─── Date relative pour les souvenirs ("hier", "il y a 3 jours"...) ───
 export function relativeDate(ts) {
   if (!ts) return '';
