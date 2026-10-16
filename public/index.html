@@ -279,6 +279,19 @@ body{background:var(--bg);color:var(--text);font-family:'Inter',-apple-system,Bl
         <button class="btn" onclick="exportData()">📥 Exporter les données</button>
       </div>
     </div>
+    <div class="section">
+      <h2>⚡ Exécuter une commande</h2>
+      <p style="color:var(--text-soft);font-size:13px;margin-bottom:12px">
+        Lance une commande "!..." d'Elya sans passer par WhatsApp. Par défaut dans ta propre conversation — précise un JID pour cibler un groupe.
+        Les commandes qui ont besoin d'un fichier joint ne marchent pas ici.
+      </p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <input type="text" id="runCmdChatId" placeholder="JID cible (optionnel)" style="flex:1;min-width:160px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+        <input type="text" id="runCmdText" placeholder="!niveau" style="flex:2;min-width:200px;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)">
+        <button class="btn" onclick="runCommand()">Exécuter</button>
+      </div>
+      <div id="runCmdOutput" style="font-size:13px;white-space:pre-wrap"></div>
+    </div>
   </div>
 </div>
 
@@ -552,7 +565,7 @@ function renderConversations(key) {
       }
       tbody.innerHTML = convs.map(c => `
         <tr>
-          <td style="font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(c.id)}</td>
+          <td style="font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(c.id)}">${escapeHtml(c.name || c.id)}</td>
           <td>${c.messageCount}</td>
           <td style="font-size:12px;color:var(--text-soft);max-width:300px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(c.lastMessage)}</td>
           <td><button class="btn btn-sm btn-danger" onclick="deleteConv('${c.id}')">Supprimer</button></td>
@@ -689,7 +702,7 @@ function loadTargetChats() {
         return;
       }
       select.innerHTML = convs.map(c => 
-        `<option value="${escapeHtml(c.id)}">${escapeHtml(c.id)} (${c.messageCount} msgs)</option>`
+        `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name || c.id)} (${c.messageCount} msgs)</option>`
       ).join('');
     });
 }
@@ -740,7 +753,7 @@ function renderGroups(settings) {
         const transOn = settings && settings[g.id] && settings[g.id].transcribe;
         return `
           <div style="padding:16px 0;border-bottom:1px solid var(--border)">
-            <div style="font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:8px">${escapeHtml(g.id)}</div>
+            <div style="font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:8px" title="${escapeHtml(g.id)}">${escapeHtml(g.name || g.id)}</div>
             <div style="display:flex;flex-direction:column;gap:10px">
               <div style="display:flex;justify-content:space-between;align-items:center">
                 <span style="font-size:12px;color:var(--text-soft)">🎙️ Transcription vocale</span>
@@ -814,6 +827,47 @@ function sendTargetedMessage() {
       alert('❌ Erreur : ' + (data.error || 'inconnue'));
     }
   }).catch(e => alert('❌ Erreur réseau'));
+}
+
+function runCommand() {
+  const chatId = document.getElementById('runCmdChatId').value.trim();
+  const command = document.getElementById('runCmdText').value.trim();
+  const out = document.getElementById('runCmdOutput');
+  if (!command) return;
+  out.textContent = '⏳ Exécution...';
+  fetch('/api/run-command?key=' + encodeURIComponent(API_KEY), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ command, chatId: chatId || undefined }),
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (!data.ok) { out.textContent = '⚠️ ' + (data.error || 'Erreur inconnue.'); return; }
+      if (!data.outputs || !data.outputs.length) { out.textContent = '(aucune réponse)'; return; }
+      out.innerHTML = '';
+      data.outputs.forEach(item => {
+        if (item.type === 'text') {
+          const p = document.createElement('div');
+          p.style.marginBottom = '8px';
+          p.textContent = item.text;
+          out.appendChild(p);
+        } else if (item.type === 'image') {
+          const img = document.createElement('img');
+          img.src = item.dataUrl;
+          img.style.maxWidth = '100%';
+          img.style.borderRadius = '8px';
+          img.style.marginBottom = '8px';
+          out.appendChild(img);
+          if (item.caption) {
+            const cap = document.createElement('div');
+            cap.style.cssText = 'font-size:12px;color:var(--text-soft);margin-bottom:8px';
+            cap.textContent = item.caption;
+            out.appendChild(cap);
+          }
+        }
+      });
+    })
+    .catch(() => { out.textContent = '⚠️ Erreur réseau.'; });
 }
 
 function exportData() {
