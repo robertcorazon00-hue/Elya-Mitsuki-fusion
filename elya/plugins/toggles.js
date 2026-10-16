@@ -1,4 +1,4 @@
-import { translationStore, antideleteStore, introStore, milestonesStore, voixAutoStore, saveData } from '../store.js';
+import { translationStore, antideleteStore, introStore, milestonesStore, voixAutoStore, welcomeStore, saveData } from '../store.js';
 import { MILESTONES } from '../helpers.js';
 import { PREFIX } from '../config.js';
 
@@ -121,4 +121,29 @@ const voixauto = {
   },
 };
 
-export default [traduction, antidelete, presentation, milestones, voixauto];
+const bienvenue = {
+  command: 'bienvenue',
+  aliases: ['welcome'],
+  category: 'GENERAL',
+  description: 'Message de bienvenue automatique aux nouveaux membres du groupe',
+  groupOnly: true,
+  handler: async ({ sock, chatId, args }) => {
+    const sub = args[1]?.toLowerCase();
+    if (sub === 'on') {
+      if (!welcomeStore[chatId]) welcomeStore[chatId] = {};
+      welcomeStore[chatId].enabled = true;
+      await saveData('welcome', welcomeStore);
+      await sock.sendMessage(chatId, { text: `👋 Accueil des nouveaux membres *activé*.\\nJe souhaiterai la bienvenue automatiquement à chaque arrivée.` });
+    } else if (sub === 'off') {
+      if (!welcomeStore[chatId]) welcomeStore[chatId] = {};
+      welcomeStore[chatId].enabled = false;
+      await saveData('welcome', welcomeStore);
+      await sock.sendMessage(chatId, { text: `🔕 Accueil des nouveaux membres *désactivé*.` });
+    } else {
+      const on = !!(welcomeStore[chatId] && welcomeStore[chatId].enabled);
+      await sock.sendMessage(chatId, { text: `👋 Accueil des nouveaux membres : ${on ? '✅ Activé' : '🔕 Désactivé'}\\n\\nUtilise : ${PREFIX}bienvenue on | off` });
+    }
+  },
+};
+
+export default [traduction, antidelete, presentation, milestones, voixauto, bienvenue];
