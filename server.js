@@ -60,13 +60,14 @@ import { findElyaCommand } from './elya-menu-data.js';
 import * as runtime from './elya/runtime.js';
 import {
   historyStore, memoryStore, bannedWordsStore, strikesStore, linksStore,
-  groupSettingsStore, lockdownStore, dmIntroStore, introStore, translationStore,
+  groupSettingsStore, lockdownStore, dmIntroStore, introStore, translationStore, welcomeStore, contactsStore, PHOTOS_DIR, photosStore,
   voixAutoStore, voixGlobalStore, silenceStore, reactionsStore,
   aiModelStore, saveData, extractLinks, isAutoReplyEnabled, isTranscribeEnabled,
   DATA_DIR, logRecentMessage, moodStore, morningStore,
 } from './elya/store.js';
 import { startScheduler as startSendScheduler, TIMEZONE as REMINDER_TIMEZONE } from './elya-send-scheduler.js';
 import { startScheduler as startChannelScheduler } from './elya-channel-posts.js';
+import { startStatusScheduler } from './elya-status-scheduler.js';
 import { parseReminder } from './elya/reminderParser.js';
 import { addReminder, startReminderScheduler } from './elya-reminders-scheduler.js';
 import { startMorningScheduler } from './elya-morning-scheduler.js';
@@ -89,7 +90,7 @@ const PORT = process.env.PORT || process.env.DASHBOARD_PORT || 3000;
 // persistance dédiée pour les identifiants Baileys (hors-scope ici).
 const AUTH_DIR = process.env.AUTH_DIR || path.join(DATA_DIR, 'auth_info');
 const USE_PAIRING_CODE = (process.env.USE_PAIRING_CODE || 'true').toLowerCase() === 'true';
-const PAIRING_NUMBER = process.env.PAIRING_NUMBER || '';
+let PAIRING_NUMBER = process.env.PAIRING_NUMBER || '';
 const TARGET_LINKS_GROUP = process.env.TARGET_LINKS_GROUP || '';
 
 let DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD;
@@ -152,11 +153,42 @@ app.get('/api/logs', requireKey, (req, res) => {
   res.json({ logs: runtime.errorLog });
 });
 
-app.get('/api/conversations', requireKey, (req, res) => {
-  const convs = Object.entries(historyStore).map(([id, msgs]) => ({
-    id,
-    messageCount: msgs.length,
-    lastMessage: msgs.length ? (msgs[msgs.length - 1].text || '').slice(0, 200) : '',
+// Petit cache en mémoire pour éviter de spammer groupMetadata() à chaque
+// rafraîchissement du dashboard (expire après 10 min).
+const groupNameCache = new Map(); // jid -> { name, at }
+const GROUP_NAME_CACHE_MS = 10 * 60 * 1000;
+async function getGroupName(sock, jid) {
+  const cached = groupNameCache.get(jid);
+  if (cached && Date.now() - cached.at < GROUP_NAME_CACHE_MS) return cached.name;
+  try {
+    const meta = await sock.groupMetadata(jid);
+    const name = meta?.subject || jid;
+    groupNameCache.set(jid, { name, at: Date.now() });
+    return name;
+  } catch (_) {
+    return jid; // repli : JID brut si la métadonnée n'est pas accessible (groupe quitté, etc.)
+  }
+}
+
+app.get('/api/conversations', requireKey, async (req, res) => {
+  const sock = runtime.getSock();
+  const convs = await Promise.all(Object.entries(historyStore).map(async ([id, msgs]) => {
+    let name = null;
+    if (id.endsWith('@g.us') && sock) {
+      name = await getGroupName(sock, id);
+    } else if (!id.endsWith('@g.us')) {
+      // DM : on reprend le prénom déjà enregistré avec les messages (userName),
+      // en partant du plus récent -> évite d'afficher le JID brut (ex: @lid).
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i].userName) { name = msgs[i].userName; break; }
+      }
+    }
+    return {
+      id,
+      name,
+      messageCount: msgs.length,
+      lastMessage: msgs.length ? (msgs[msgs.length - 1].text || '').slice(0, 200) : '',
+    };
   }));
   res.json(convs);
 });
@@ -238,6 +270,23 @@ app.post('/api/scheduled-sends/:id/cancel', requireKey, async (req, res) => {
   res.json({ ok: !!cancelled });
 });
 
+// Exécute une commande Elya depuis le dashboard — même moteur que /run sur
+// Telegram, mais renvoie le résultat en JSON (texte direct, image en base64)
+// au lieu de l'envoyer sur Telegram.
+app.post('/api/run-command', requireKey, async (req, res) => {
+  const { command, chatId } = req.body || {};
+  const outputs = [];
+  try {
+    await runElyaCommand(command, chatId || null, async (item) => {
+      if (item.type === 'text') outputs.push({ type: 'text', text: item.text });
+      else if (item.type === 'image') outputs.push({ type: 'image', dataUrl: `data:image/png;base64,${item.buffer.toString('base64')}`, caption: item.caption });
+    });
+    res.json({ ok: true, outputs });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.get('/api/connection-status', requireKey, (req, res) => {
   res.json({
     ...waConnectionStatus,
@@ -249,7 +298,8 @@ app.get('/api/connection-status', requireKey, (req, res) => {
 // besoin d'un redéploiement Render — supprime juste la session locale et
 // redémarre le socket Baileys dans le process déjà en cours. Utilisée par le
 // bouton du dashboard ET par la commande /redemarrer sur Telegram.
-async function regenerateConnection() {
+async function regenerateConnection(newNumber = null) {
+  if (newNumber) PAIRING_NUMBER = newNumber; // change le numéro ciblé pour le prochain pairing
   try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) { /* dossier déjà absent, pas grave */ }
   waConnectionStatus = { connected: false, since: null, lastDisconnectReason: null };
   startBot();
@@ -292,6 +342,13 @@ function trackGeminiCall() {
 }
 
 async function askGeminiDirect(chatId, userName, userText, isOwner, sender = null) {
+  // Si le quota du jour est déjà atteint, inutile de tenter l'appel (ça
+  // échouera de toute façon côté Google) — on bascule direct sur le repli,
+  // et surtout le compteur arrête de grimper au-delà de la vraie limite.
+  const today = new Date().toISOString().slice(0, 10);
+  if (geminiQuota.date === today && geminiQuota.count >= GEMINI_DAILY_LIMIT) {
+    throw new Error('Quota Gemini du jour déjà atteint');
+  }
   trackGeminiCall();
   const systemPrompt = getSystemPrompt(chatId, userName, isOwner, sender);
   const history = (historyStore[chatId] || []).slice(-MAX_HISTORY);
@@ -302,7 +359,7 @@ async function askGeminiDirect(chatId, userName, userText, isOwner, sender = nul
   return (text || '').trim();
 }
 
-async function askElya(chatId, userName, userText, isOwner = false, sender = null) {
+async function askElya(chatId, userName, userText, isOwner = false, sender = null, msgId = null) {
   const provider = aiModelStore[chatId] || 'gemini';
   let reply = null;
 
@@ -357,7 +414,7 @@ async function askElya(chatId, userName, userText, isOwner = false, sender = nul
   if (!reply) reply = "Désolée, j'ai un petit souci technique là 💛 réessaie dans un instant.";
 
   historyStore[chatId] = historyStore[chatId] || [];
-  historyStore[chatId].push({ role: 'user', text: userText, userName, date: Date.now() });
+  historyStore[chatId].push({ role: 'user', text: userText, userName, date: Date.now(), id: msgId });
   historyStore[chatId].push({ role: 'assistant', text: reply, date: Date.now() });
   const cap = MAX_HISTORY * 2;
   if (historyStore[chatId].length > cap) {
@@ -503,14 +560,53 @@ async function transcribeVoiceMessage(buffer) {
 // en parallèle sur le même socket, voir le commentaire dans handler.js.
 // ─────────────────────────────────────────────────────────────────────────
 function attachElyaListener(sock) {
-  sock.ev.on('messages.upsert', async ({ messages }) => {
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    // À la reconnexion, WhatsApp relivre parfois un historique de messages
+    // manqués avec type !== 'notify' (contrairement à un message qui vient
+    // vraiment d'arriver) — sans ce filtre, le bot traitait de vieilles
+    // commandes comme si elles étaient fraîches. 'notify' = vraiment nouveau.
+    if (type !== 'notify') return;
     const msg = messages[0];
     if (!msg?.message || msg.key.remoteJid === 'status@broadcast') return;
+
+    // Filet de sécurité supplémentaire : ignore aussi tout message antérieur
+    // à l'ouverture de cette connexion (quelques secondes de marge pour les
+    // petits décalages d'horloge).
+    const msgTimestampMs = Number(msg.messageTimestamp) * 1000;
+    if (waConnectionStatus.since && msgTimestampMs && msgTimestampMs < new Date(waConnectionStatus.since).getTime() - 5000) return;
 
     const chatId = msg.key.remoteJid;
     const isGroup = chatId.endsWith('@g.us');
     const sender = msg.key.participant || chatId;
-    const senderName = msg.pushName || sender.split('@')[0];
+    // Avec le nouveau système @lid de WhatsApp, la partie avant le "@" peut
+    // être un identifiant interne illisible (ex: "78955256225793") plutôt
+    // que le vrai numéro — on ne l'utilise comme "prénom" que si pushName
+    // est absent ET que ça ressemble à un vrai numéro de téléphone (8-15
+    // chiffres, formats internationaux classiques). Sinon repli neutre.
+    const rawIdPart = sender.split('@')[0];
+    const looksLikePhoneNumber = /^\+?\d{8,15}$/.test(rawIdPart);
+    const senderName = msg.pushName || (looksLikePhoneNumber ? rawIdPart : 'toi');
+
+    // ── Réaction 👍 sur un message -> le sauvegarde comme souvenir ──
+    // (couvre les messages de la personne elle-même ou de quelqu'un d'autre
+    // dans un groupe, puisqu'on garde l'id de chaque message utilisateur en
+    // historique ; pas encore possible sur les réponses d'Elya elle-même,
+    // dont l'id n'est pas capturé à l'envoi.)
+    const reaction = msg.message.reactionMessage;
+    if (reaction) {
+      if (['👍', '❤️', '❤'].includes(reaction.text)) {
+        const originalEntry = (historyStore[chatId] || []).find((h) => h.id === reaction.key?.id && h.role === 'user');
+        if (originalEntry) {
+          const isGroupChat = chatId.endsWith('@g.us');
+          const souvenirText = isGroupChat ? `${originalEntry.userName || senderName} : ${originalEntry.text}` : originalEntry.text;
+          memoryStore[chatId] = memoryStore[chatId] || [];
+          memoryStore[chatId].push({ text: souvenirText, date: Date.now(), fromReaction: true });
+          await saveData('memory', memoryStore).catch(() => {});
+        }
+      }
+      return;
+    }
+
     const text =
       msg.message.conversation ||
       msg.message.extendedTextMessage?.text ||
@@ -595,7 +691,13 @@ function attachElyaListener(sock) {
       if (isGroup) {
         const mentionedJid = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
         const botNumber = sock.user?.id?.split(':')[0];
-        const mentioned = mentionedJid.some((j) => j.split('@')[0] === botNumber);
+        const realMention = mentionedJid.some((j) => j.split('@')[0] === botNumber);
+        // Beaucoup de gens tapent juste "@elya" en texte sans sélectionner le
+        // contact dans la liste WhatsApp — dans ce cas mentionedJid reste
+        // vide (ce n'est pas une vraie mention pour WhatsApp). On détecte
+        // donc aussi le prénom du bot écrit tel quel, en secours.
+        const nameMention = text && new RegExp(`\\b${BOT_NAME}\\b`, 'i').test(text);
+        const mentioned = realMention || nameMention;
         if (!isAutoReplyEnabled(chatId) && !mentioned) return;
       }
 
@@ -620,6 +722,37 @@ function attachElyaListener(sock) {
         await sock.sendMessage(chatId, {
           text: `*Salut* ${senderName} !\n*𝗘𝗹𝘆𝗮✿* ici 💛, comment puis-je vous aider ?`,
         }).catch(() => {});
+      }
+
+      // ── Vue unique envoyée par le créateur lui-même en DM -> gardée dans
+      // le coffre photo, avec confirmation visible (rien de caché : c'est
+      // elle-même qui l'envoie à Elya, la destinataire légitime). On ne
+      // touche jamais à un vue unique envoyé par quelqu'un d'autre. ──
+      const viewOnceContent = msg.message.viewOnceMessageV2?.message
+        || msg.message.viewOnceMessageV2Extension?.message
+        || msg.message.viewOnceMessage?.message
+        || null;
+      if (viewOnceContent && !isGroup && isOwner(sender)) {
+        const vMediaMsg = viewOnceContent.imageMessage || viewOnceContent.videoMessage;
+        if (vMediaMsg) {
+          try {
+            const buffer = await downloadMediaMessage(
+              { key: msg.key, message: viewOnceContent }, 'buffer', {},
+            );
+            const ext = viewOnceContent.imageMessage ? 'jpg' : 'mp4';
+            const fileName = `viewonce-${Date.now()}.${ext}`;
+            const filePath = path.join(PHOTOS_DIR, fileName);
+            fs.writeFileSync(filePath, buffer);
+            const nom = `vu-unique-${Date.now()}`;
+            if (!photosStore[sender]) photosStore[sender] = {};
+            photosStore[sender][nom] = filePath;
+            await saveData('photos', photosStore);
+            await sock.sendMessage(chatId, { text: `💾 Vue unique sauvegardée sous le nom "${nom}" — récupérable avec ${PREFIX}givp ${nom} (liste complète : ${PREFIX}listp).` });
+          } catch (e) {
+            console.error('Erreur sauvegarde vue unique:', e.message);
+          }
+        }
+        return;
       }
 
       // ── Image / PDF / Vidéo envoyés sans commande : analyse automatique ──
@@ -672,7 +805,7 @@ function attachElyaListener(sock) {
             }
           }
 
-          const reply = await askElya(chatId, senderName, transcription, isOwner(sender) || msg.key.fromMe, sender);
+          const reply = await askElya(chatId, senderName, transcription, isOwner(sender) || msg.key.fromMe, sender, msg.key.id);
           const wantsVoiceReply = voixGlobalStore.enabled || !!voixAutoStore[chatId]?.enabled;
           await humanDelay(sock, chatId, wantsVoiceReply ? 'recording' : 'composing');
           if (wantsVoiceReply) {
@@ -729,7 +862,7 @@ function attachElyaListener(sock) {
       // ── Conversation libre ──
       if (!text) return;
       await sock.sendPresenceUpdate('composing', chatId).catch(() => {});
-      const reply = await askElya(chatId, senderName, text, isOwner(sender) || msg.key.fromMe, sender);
+      const reply = await askElya(chatId, senderName, text, isOwner(sender) || msg.key.fromMe, sender, msg.key.id);
 
       // ── Mode vocal : global (!voixtous, tous les chats) ou local (!voixauto, ce chat) ──
       const wantsVoice = voixGlobalStore.enabled || !!voixAutoStore[chatId]?.enabled;
@@ -799,6 +932,69 @@ async function startBot() {
   });
 
   runtime.setSock(sock);
+  // ── Messages édités : met à jour le texte déjà stocké en historique ──
+  // (WhatsApp permet d'éditer un message envoyé dans les ~15 minutes). Sans
+  // ça, Elya garderait la version originale (ex: avec une faute ou une
+  // question mal formulée) même après correction par la personne. On ne
+  // renvoie pas de nouvelle réponse automatiquement — juste la mémoire qui
+  // reste à jour pour la suite de la conversation.
+  sock.ev.on('messages.update', (updates) => {
+    try {
+      for (const { key, update } of updates) {
+        const protocolMsg = update?.message?.protocolMessage;
+        const editedContent = protocolMsg?.editedMessage;
+        if (!editedContent) continue;
+        const newText = editedContent.conversation || editedContent.extendedTextMessage?.text;
+        if (!newText) continue;
+        const chatId = key.remoteJid;
+        const entry = (historyStore[chatId] || []).find((h) => h.id === key.id && h.role === 'user');
+        if (entry) {
+          entry.text = newText;
+          entry.edited = true;
+          saveData('history', historyStore).catch(() => {});
+        }
+      }
+    } catch (e) {
+      console.error('Erreur traitement message édité:', e.message);
+    }
+  });
+
+  // ── Synchro des vrais contacts du téléphone (envoyée par WhatsApp à la
+  // connexion, puis mise à jour en continu) — sert notamment à !poststatut
+  // pour viser les vrais contacts plutôt que juste ceux qui ont déjà écrit.
+  const syncContacts = async (contacts) => {
+    let changed = false;
+    for (const c of contacts) {
+      if (!c?.id || !c.id.endsWith('@s.whatsapp.net')) continue;
+      const name = c.name || c.notify || c.verifiedName;
+      if (name && contactsStore[c.id] !== name) { contactsStore[c.id] = name; changed = true; }
+    }
+    if (changed) await saveData('contacts', contactsStore);
+  };
+  sock.ev.on('contacts.upsert', syncContacts);
+  sock.ev.on('contacts.update', syncContacts);
+
+  // ── Accueil automatique des nouveaux membres (!bienvenue on) ──
+  sock.ev.on('group-participants.update', async ({ id: chatId, participants, action }) => {
+    try {
+      if (action !== 'add') return;
+      if (!welcomeStore[chatId]?.enabled) return;
+      for (const participant of participants) {
+        // Pas de pushName disponible pour quelqu'un qui vient d'arriver -> on
+        // n'utilise le numéro que s'il ressemble à un vrai numéro de
+        // téléphone (même garde-fou que pour le @lid ailleurs dans le code).
+        const rawId = participant.split('@')[0];
+        const displayName = /^\+?\d{8,15}$/.test(rawId) ? rawId : null;
+        const greeting = displayName
+          ? `👋 Bienvenue @${rawId} dans le groupe ! Ravie de t'avoir parmi nous 💛`
+          : `👋 Bienvenue dans le groupe ! Ravie de t'avoir parmi nous 💛`;
+        await sock.sendMessage(chatId, { text: greeting, mentions: displayName ? [participant] : [] });
+      }
+    } catch (e) {
+      console.error('Erreur accueil nouveau membre:', e.message);
+    }
+  });
+
   sock.ev.on('creds.update', saveCreds);
 
   // Référence au setTimeout qui redemande un pairing code — on l'annule si la
@@ -867,6 +1063,7 @@ async function startBot() {
   attachElyaListener(sock);
   startSendScheduler(sock);
   startChannelScheduler(sock);
+  startStatusScheduler(sock);
   startReminderScheduler(sock);
   startMorningScheduler(sock);
 
@@ -878,8 +1075,66 @@ httpServer.listen(PORT, () => {
 });
 
 startBot();
+// Exécute une commande "!..." comme si elle venait de WhatsApp, en réutilisant
+// le même dispatcher que pour les vrais messages (elyaPlugins.dispatch) —
+// aucun plugin à réécrire. On construit un faux `sock` dont sendMessage()
+// redirige vers onOutput() au lieu de WhatsApp, et un faux `msg` minimal.
+// Commun à Telegram (/run) et au dashboard (/api/run-command). Limite : les
+// commandes qui attendent un média joint (image/audio envoyé ou cité) ne
+// fonctionnent pas ici, il n'y a rien à transmettre dans ce sens-là.
+// onOutput(item) reçoit { type: 'text', text } ou { type: 'image', buffer, caption }.
+async function runElyaCommand(commandText, targetChatId, onOutput) {
+  if (!commandText || !commandText.startsWith(PREFIX)) {
+    await onOutput({ type: 'text', text: `⚠️ Syntaxe : ${PREFIX}commande args` });
+    return;
+  }
+  const realSock = runtime.getSock();
+  if (!realSock) {
+    await onOutput({ type: 'text', text: '⚠️ Elya n\'est pas connectée à WhatsApp pour le moment.' });
+    return;
+  }
+  const chatId = targetChatId || `${PAIRING_NUMBER}@s.whatsapp.net`;
+  const isGroup = chatId.endsWith('@g.us');
+  const args = commandText.slice(PREFIX.length).trim().split(/\s+/);
+  const cmd = (args[0] || '').toLowerCase();
+  const fakeMsg = {
+    key: { remoteJid: chatId, fromMe: true, id: 'ext-' + Date.now() },
+    message: { conversation: commandText },
+    pushName: 'Toi',
+  };
+  // Le faux sock délègue tout ce qui n'est pas sendMessage au vrai socket
+  // (pour que groupMetadata, profilePictureUrl... marchent si une commande
+  // en a besoin), mais redirige sendMessage vers onOutput.
+  const fakeSock = new Proxy(realSock, {
+    get(target, prop) {
+      if (prop === 'sendMessage') {
+        return async (_jid, content) => {
+          if (content?.text) { await onOutput({ type: 'text', text: content.text }); return; }
+          if (content?.image) { await onOutput({ type: 'image', buffer: content.image, caption: content.caption || '' }); return; }
+          await onOutput({ type: 'text', text: '📎 (réponse avec un média non transmissible ici)' });
+        };
+      }
+      return target[prop];
+    },
+  });
+  const handled = await elyaPlugins.dispatch(cmd, {
+    sock: fakeSock, msg: fakeMsg, chatId, sender: `${PAIRING_NUMBER}@s.whatsapp.net`,
+    senderName: 'Toi', isGroup, isOwner: true, cmd, args, text: commandText,
+  });
+  if (!handled) await onOutput({ type: 'text', text: `💡 Commande "${PREFIX}${cmd}" introuvable.` });
+}
+
+async function runCommandFromTelegram(commandText, targetChatId, senderChatId) {
+  await runElyaCommand(commandText, targetChatId, async (item) => {
+    if (item.type === 'text') await sendTelegramText(item.text, senderChatId);
+    else if (item.type === 'image') await sendTelegramPhoto(item.buffer, item.caption, senderChatId);
+  });
+}
+
 startTelegramCommandListener({
   onRestart: regenerateConnection,
+  onCommand: runCommandFromTelegram,
+  onPair: regenerateConnection,
   getStatusText: () => {
     if (waConnectionStatus.connected) {
       const mins = Math.max(0, Math.round((Date.now() - new Date(waConnectionStatus.since).getTime()) / 60000));
