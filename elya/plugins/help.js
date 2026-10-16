@@ -5,11 +5,8 @@ export default {
   command: 'help',
   aliases: ['aide', 'menu'],
   category: 'GENERAL',
-  description: 'Affiche l\'aide ou le menu complet des commandes (DM uniquement, silencieux en groupe)',
-  handler: async ({ sock, chatId, cmd, args, isGroup }) => {
-    // Jamais de réponse en groupe (même tagué) — même pas un message de refus.
-    if (isGroup) return;
-
+  description: 'Affiche l\'aide ou le menu complet des commandes',
+  handler: async ({ sock, chatId, cmd, args }) => {
     // Seul ".help <commande>" fait une recherche ciblée — ".aide x" / ".menu x" affichent le menu complet, comme avant.
     if (cmd === 'help' && args[1]) {
       const found = findElyaCommand(args[1]);
