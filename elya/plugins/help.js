@@ -109,6 +109,7 @@ ${sep}
   ${PREFIX}recap [nombre] — résume les derniers messages
   ${PREFIX}regles / ${PREFIX}strikes
   ${PREFIX}elyaon / ${PREFIX}elyaoff — Elya répond à tout, ou juste si mentionnée
+  ${PREFIX}bienvenue on|off — accueil automatique des nouveaux membres
   ${PREFIX}antidelete on|off
   ${PREFIX}presentation on|off
   ${PREFIX}milestones on|off
@@ -142,6 +143,8 @@ ${sep}
   ${PREFIX}lockdown on|off — restreindre aux owners
   ${PREFIX}send <destinataire> <heure> (<message>) — programmer un envoi
   ${PREFIX}broadcast <message> — envoyer à tous les chats
+  ${PREFIX}poststatut <texte> — poster un statut WhatsApp tout de suite
+  ${PREFIX}programmerstatut <heure> (<texte>) — programmer un statut (texte/photo/vidéo en répondant à un média)
   ${PREFIX}addword <mot> / ${PREFIX}delword <mot>
 
 ${sep}
@@ -149,6 +152,7 @@ ${sep}
 ${sep}
 
   ${PREFIX}newsletter — JID d'une chaîne
+  ${PREFIX}csc <JID> <texte> — changer le statut/description de la chaîne
   ${PREFIX}projet — créer un projet lié à une chaîne
   ${PREFIX}programmer — programmer une publication
   ${PREFIX}projets — voir projets et publications
