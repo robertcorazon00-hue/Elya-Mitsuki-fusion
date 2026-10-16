@@ -48,6 +48,9 @@ export const translationStore = await loadData('translation'); // { chatId: { en
 export const antideleteStore = await loadData('antidelete'); // { chatId: { enabled: bool } }
 export const voixAutoStore = await loadData('voixAuto'); // { chatId: { enabled: bool } } — !voixauto, réponses en note vocale
 export const milestonesStore = await loadData('milestonesConfig'); // { chatId: { enabled: bool } }
+export const welcomeStore = await loadData('welcome'); // { chatId: { enabled: bool } } — !bienvenue, message d'accueil auto aux nouveaux membres
+export const contactsStore = await loadData('contacts'); // { jid: name } — vrais contacts du téléphone, synchronisés par WhatsApp à la connexion (pas juste ceux qui ont écrit au bot)
+export const scheduledStatusStore = await loadData('scheduledStatus', { nextId: 1, items: [] }); // !programmerstatut — statuts programmés (texte/image/vidéo)
 export const aiModelStore = await loadData('aiModel'); // { chatId: 'gemini'|'groq'|'openrouter'|'gpt5'|'copilot'|'glm' }
 export const aiUsageStore = await loadData('aiUsage'); // { provider: nombre d'appels }
 export const autoSearchStore = await loadData('autoSearch'); // { chatId: { enabled: bool } } - activée par défaut
@@ -67,6 +70,9 @@ if (!fs.existsSync(VAULT_DIR)) fs.mkdirSync(VAULT_DIR, { recursive: true });
 // Dossier où sont stockés les fichiers image de !addp (le store ci-dessus ne garde que les chemins)
 export const PHOTOS_DIR = path.join(DATA_DIR, 'photos');
 if (!fs.existsSync(PHOTOS_DIR)) fs.mkdirSync(PHOTOS_DIR, { recursive: true });
+
+export const STATUS_MEDIA_DIR = path.join(DATA_DIR, 'statusMedia');
+if (!fs.existsSync(STATUS_MEDIA_DIR)) fs.mkdirSync(STATUS_MEDIA_DIR, { recursive: true });
 
 // ─── Envois programmés (!send) ───
 // { nextId, items: [{ id, digits, toDisplay, message, scheduledAt, createdAt,
@@ -217,3 +223,4 @@ export function isChannelLink(url) {
 export function getTargetLinksGroup(defaultTargetLinksGroup) {
   return linkTargetStore.targetChatId || defaultTargetLinksGroup;
 }
+ 
