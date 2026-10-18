@@ -41,7 +41,9 @@ export async function sendTelegramText(text, targetChatId = null) {
     await axios.post(`${API}/sendMessage`, {
       chat_id: targetChatId || CHAT_ID,
       text,
-      parse_mode: 'HTML',
+      // Pas de parse_mode HTML : plusieurs messages contiennent des
+      // "<numéro>" ou "<chatId>" en guise d'exemples de syntaxe, que
+      // Telegram confondait avec des balises HTML invalides et refusait.
     });
   } catch (e) {
     console.error('Erreur envoi Telegram (texte):', e.response?.data?.description || e.message);
